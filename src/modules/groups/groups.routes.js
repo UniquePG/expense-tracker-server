@@ -30,7 +30,7 @@ router.delete('/:id', authenticate, validateParams(groupIdSchema), groupsControl
 // Members
 router.get('/:id/members', authenticate, validateParams(groupIdSchema), groupsController.getGroupMembers);
 router.post('/:id/members', authenticate, validateParams(groupIdSchema), validateBody(addMemberSchema), groupsController.addMember);
-router.delete('/:id/members/:userId', authenticate, validateParams(groupIdSchema), groupsController.removeMemberById);
+router.delete('/:id/members/:memberId', authenticate, validateParams(groupMemberIdSchema), groupsController.removeMemberById);
 
 // Group expenses
 router.get('/:id/expenses', authenticate, validateParams(groupIdSchema), groupsController.getGroupExpenses);

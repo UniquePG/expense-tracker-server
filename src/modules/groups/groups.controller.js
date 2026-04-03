@@ -17,7 +17,7 @@ class GroupsController {
 
   async getGroupById(req, res, next) {
     try {
-      const group = await groupsService.getGroupById(req.validatedParams.id, req.user.id);
+      const group = await groupsService.getGroupById(parseInt(req.validatedParams.id), req.user.id);
       return ApiResponse.success(res, 'Group retrieved', { group });
     } catch (error) {
       next(error);
@@ -79,7 +79,7 @@ class GroupsController {
   async getGroupMembers(req, res, next) {
     try {
       const members = await groupsService.getGroupMembers(
-        req.validatedParams.id,
+        parseInt(req.validatedParams.id),
         req.user.id
       );
       return ApiResponse.success(res, 'Group members retrieved', { members });
@@ -106,7 +106,7 @@ class GroupsController {
       await groupsService.removeMember(
         req.validatedParams.id,
         req.user.id,
-        req.params.userId
+        req.validatedParams.memberId
       );
       return ApiResponse.success(res, 'Member removed');
     } catch (error) {
@@ -132,7 +132,7 @@ class GroupsController {
   async getGroupBalances(req, res, next) {
     try {
       const balances = await groupsService.getGroupBalances(
-        req.validatedParams.id,
+        parseInt(req.validatedParams.id),
         req.user.id
       );
       return ApiResponse.success(res, 'Group balances retrieved', { balances });
@@ -145,7 +145,7 @@ class GroupsController {
     try {
       const pagination = PaginationHelper.getPrismaPagination(req.query);
       const { expenses, total } = await groupsService.getGroupExpenses(
-        req.validatedParams.id,
+        parseInt(req.validatedParams.id),
         req.user.id,
         pagination
       );

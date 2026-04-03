@@ -10,11 +10,12 @@ const createGroupSchema = z.object({
 const updateGroupSchema = z.object({
   name: z.string().min(1).max(100).optional(),
   description: z.string().max(500).optional(),
-  image: z.string().url().optional()
+  image: z.string().url().nullable().optional(),
+  status: z.enum(['ACTIVE', 'ARCHIVED']).optional()
 });
 
 const groupIdSchema = z.object({
-  id: z.number('Invalid group ID')
+  id: z.string('Invalid group ID')
 });
 
 const groupMemberIdSchema = z.object({

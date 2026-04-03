@@ -3,8 +3,13 @@ const config = require('./env');
 
 // Prisma client instance with logging in development
 const prisma = new PrismaClient({
-  log: config.env === 'development' 
-    ? ['query', 'info', 'warn', 'error']
+  log: config.env === 'development'
+    ? [
+      // 'query', 
+      // 'info', 
+      // 'warn', 
+      'error'
+    ]
     : ['error'],
 });
 

@@ -157,6 +157,21 @@ class GroupsService {
               members: true,
               expenses: true
             }
+          },
+          expenses: {
+            where: { isDeleted: false },
+            select: {
+              amount: true,
+              paidById: true,
+              expenseDate: true,
+              splits: {
+                select: {
+                  userId: true,
+                  amount: true,
+                  isSettled: true
+                }
+              }
+            }
           }
         },
         skip,
@@ -166,7 +181,37 @@ class GroupsService {
       prisma.group.count({ where })
     ]);
 
-    return { groups, total };
+    const enrichedGroups = groups.map((group) => {
+      const expenses = group.expenses || [];
+      const totalPaidByUser = expenses.reduce((sum, expense) => {
+        if (expense.paidById === userId) {
+          return sum + parseFloat(expense.amount);
+        }
+        return sum;
+      }, 0);
+
+      const totalOwedByUser = expenses.reduce((sum, expense) => {
+        const ownSplit = (expense.splits || []).find(
+          (split) => split.userId === userId && !split.isSettled
+        );
+        return sum + (ownSplit ? parseFloat(ownSplit.amount) : 0);
+      }, 0);
+
+      const latestExpenseDate = expenses
+        .map((expense) => expense.expenseDate)
+        .filter(Boolean)
+        .sort((a, b) => new Date(b) - new Date(a))[0];
+
+      return {
+        ...group,
+        memberCount: group._count?.members || group.members?.length || 0,
+        expenseCount: group._count?.expenses || 0,
+        myBalance: parseFloat((totalPaidByUser - totalOwedByUser).toFixed(2)),
+        lastActivityAt: latestExpenseDate || group.updatedAt
+      };
+    });
+
+    return { groups: enrichedGroups, total };
   }
 
   async updateGroup(groupId, userId, updateData) {
@@ -191,16 +236,20 @@ class GroupsService {
   }
 
   async deleteGroup(groupId, userId) {
-    const group = await prisma.group.findFirst({
+    await this.ensureAdmin(groupId, userId);
+
+    const unsettledCount = await prisma.expenseSplit.count({
       where: {
-        id: groupId,
-        createdBy: userId,
-        status: { not: 'DELETED' }
+        isSettled: false,
+        expense: {
+          groupId,
+          isDeleted: false
+        }
       }
     });
 
-    if (!group) {
-      throw { statusCode: 403, message: 'Only creator can delete group' };
+    if (unsettledCount > 0) {
+      throw { statusCode: 400, message: 'Cannot delete group with unsettled splits' };
     }
 
     await prisma.group.update({
@@ -291,14 +340,22 @@ class GroupsService {
     return member;
   }
 
-  async removeMember(groupId, actorUserId, memberUserId) {
+  async removeMember(groupId, actorUserId, memberIdentifier) {
     const actorMembership = await this.ensureActiveMembership(groupId, actorUserId);
+    const numericIdentifier = Number(memberIdentifier);
+    const normalizedIdentifier = Number.isNaN(numericIdentifier)
+      ? memberIdentifier
+      : numericIdentifier;
 
     const targetMembership = await prisma.groupMember.findFirst({
       where: {
         groupId,
-        userId: memberUserId,
-        status: 'ACTIVE'
+        status: 'ACTIVE',
+        OR: [
+          { id: normalizedIdentifier },
+          { userId: normalizedIdentifier },
+          { contactId: normalizedIdentifier }
+        ]
       }
     });
 
@@ -306,11 +363,13 @@ class GroupsService {
       throw { statusCode: 404, message: 'Member not found in group' };
     }
 
-    if (actorUserId !== memberUserId && !actorMembership.isAdmin) {
+    const isSelfRemoval = targetMembership.userId === actorUserId;
+
+    if (!isSelfRemoval && !actorMembership.isAdmin) {
       throw { statusCode: 403, message: 'Only admins can remove other members' };
     }
 
-    if (targetMembership.isAdmin && actorUserId !== memberUserId) {
+    if (targetMembership.isAdmin && !isSelfRemoval) {
       const activeAdmins = await prisma.groupMember.count({
         where: {
           groupId,
@@ -327,12 +386,12 @@ class GroupsService {
     await prisma.groupMember.update({
       where: { id: targetMembership.id },
       data: {
-        status: actorUserId === memberUserId ? 'LEFT' : 'REMOVED',
+        status: isSelfRemoval ? 'LEFT' : 'REMOVED',
         leftAt: new Date()
       }
     });
 
-    logger.info(`Member removed from group ${groupId}: ${memberUserId}`);
+    logger.info(`Member removed from group ${groupId}: ${memberIdentifier}`);
   }
 
   async toggleMemberAdmin(groupId, adminUserId, memberId, isAdmin) {
