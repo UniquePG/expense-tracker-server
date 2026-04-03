@@ -3,6 +3,7 @@ const router = express.Router();
 const userController = require('./user.controller');
 const { authenticate } = require('../../middlewares/auth.middleware');
 const { validateBody, validateParams } = require('../../middlewares/validate.middleware');
+const { uploadImage, handleUploadError } = require('../../middlewares/upload.middleware');
 const { updateProfileSchema, userIdSchema, changePasswordSchema } = require('./user.validator');
 
 /**
@@ -73,27 +74,46 @@ router.delete('/me', authenticate, userController.deleteAccount);
  * @swagger
  * /users/avatar:
  *   post:
- *     summary: Upload user avatar
+ *     summary: Upload user avatar image
  *     tags: [Users]
  *     security:
  *       - bearerAuth: []
  *     requestBody:
  *       required: true
  *       content:
- *         application/json:
+ *         multipart/form-data:
  *           schema:
  *             type: object
  *             required:
- *               - avatar
+ *               - file
  *             properties:
- *               avatar:
+ *               file:
  *                 type: string
- *                 description: Avatar URL or base64 encoded image
+ *                 format: binary
+ *                 description: Avatar image file (JPEG, PNG, GIF, WebP - Max 5MB)
  *     responses:
  *       200:
- *         description: Avatar updated successfully
+ *         description: Avatar uploaded successfully
+ *       400:
+ *         description: Invalid file or error uploading
  */
-router.post('/avatar', authenticate, userController.uploadAvatar);
+router.post('/avatar', authenticate, uploadImage, handleUploadError, userController.uploadAvatar);
+
+/**
+ * @swagger
+ * /users/avatar:
+ *   delete:
+ *     summary: Delete user avatar
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Avatar deleted successfully
+ *       400:
+ *         description: No avatar to delete
+ */
+router.delete('/avatar', authenticate, userController.deleteAvatar);
 
 /**
  * @swagger

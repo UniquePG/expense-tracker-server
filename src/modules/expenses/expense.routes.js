@@ -3,6 +3,7 @@ const router = express.Router();
 const expensesController = require('./expense.controller');
 const { authenticate } = require('../../middlewares/auth.middleware');
 const { validateBody, validateParams, validateQuery } = require('../../middlewares/validate.middleware');
+const { uploadImage, handleUploadError } = require('../../middlewares/upload.middleware');
 const {
   createExpenseSchema,
   updateExpenseSchema,
@@ -589,7 +590,8 @@ router.delete('/:id', authenticate, validateParams(expenseIdSchema), expensesCon
  *         description: Group not found
  */
 router.post('/:id/split', authenticate, validateParams(expenseIdSchema), validateBody(createExpenseSchema), expensesController.splitExpense);
-router.post('/:id/receipt', authenticate, validateParams(expenseIdSchema), expensesController.uploadReceipt);
+router.post('/:id/receipt', authenticate, validateParams(expenseIdSchema), uploadImage, handleUploadError, expensesController.uploadReceipt);
+router.delete('/:id/image', authenticate, validateParams(expenseIdSchema), expensesController.deleteExpenseImage);
 router.put('/:id/split', authenticate, validateParams(expenseIdSchema), expensesController.updateSplit);
 router.get('/:id/comments', authenticate, validateParams(expenseIdSchema), expensesController.getComments);
 router.post('/:id/comments', authenticate, validateParams(expenseIdSchema), expensesController.addComment);

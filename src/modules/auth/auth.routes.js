@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const authController = require('./auth.controller');
-const { validateBody } = require('../../middlewares/validate.middleware');
+const { validateBody, validateQuery } = require('../../middlewares/validate.middleware');
 const { authenticate } = require('../../middlewares/auth.middleware');
 const {
   registerSchema,
@@ -9,7 +9,9 @@ const {
   refreshTokenSchema,
   forgotPasswordSchema,
   resetPasswordSchema,
-  changePasswordSchema
+  changePasswordSchema,
+  verifyEmailSchema,
+  resendVerificationSchema
 } = require('./auth.validator');
 
 /**
@@ -27,8 +29,8 @@ const {
  *       type: object
  *       properties:
  *         id:
- *           type: string
- *           format: uuid
+ *           type: Int
+ *           
  *         email:
  *           type: string
  *           format: email
@@ -296,7 +298,32 @@ router.post('/reset-password', validateBody(resetPasswordSchema), authController
  *       200:
  *         description: Email verified successfully
  */
-router.post('/verify-email', authController.verifyEmail);
+router.post('/verify-email', validateBody(verifyEmailSchema), authController.verifyEmail);
+router.get('/verify-email', validateQuery(verifyEmailSchema), authController.verifyEmailFromQuery);
+
+/**
+ * @swagger
+ * /auth/resend-verification:
+ *   post:
+ *     summary: Resend email verification
+ *     tags: [Authentication]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - email
+ *             properties:
+ *               email:
+ *                 type: string
+ *                 format: email
+ *     responses:
+ *       200:
+ *         description: Verification email sent successfully
+ */
+router.post('/resend-verification', validateBody(resendVerificationSchema), authController.resendVerification);
 
 /**
  * @swagger

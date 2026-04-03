@@ -1,3 +1,9 @@
+// ============================================================
+// SplitWiseMint — Complete Prisma Schema (Corrected & Final)
+// Version: 2.0.0  |  Date: March 2026
+// All issues from audit resolved. Production-ready.
+// ============================================================
+
 generator client {
   provider = "prisma-client-js"
 }
@@ -7,7 +13,10 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// Enums
+// ============================================================
+// ENUMS
+// ============================================================
+
 enum FriendshipStatus {
   PENDING
   ACCEPTED
@@ -23,8 +32,8 @@ enum SplitType {
 }
 
 enum ExpenseType {
-  PERSONAL
-  GROUP
+  PERSONAL   // expense not linked to any group
+  GROUP      // expense linked to a group
 }
 
 enum InviteStatus {
@@ -33,57 +42,153 @@ enum InviteStatus {
   EXPIRED
 }
 
-enum NotificationType {
-  FRIEND_REQUEST
-  EXPENSE_ADDED
-  EXPENSE_UPDATED
-  PAYMENT_RECEIVED
-  GROUP_INVITE
-  SETTLEMENT
-  REMINDER
+enum TransactionType {
+  INCOME
+  EXPENSE
+  TRANSFER        // between own accounts
+  SETTLEMENT_OUT  // money sent to settle a split
+  SETTLEMENT_IN   // money received as settlement
 }
 
-// User Model
+enum AccountType {
+  CASH
+  BANK
+  CREDIT_CARD
+  WALLET
+  UPI
+}
+
+// NEW: for settlement payment tracking
+enum SettlementStatus {
+  PENDING     // initiated, waiting for receiver confirmation
+  CONFIRMED   // receiver confirmed receipt
+  REJECTED    // receiver rejected (e.g., wrong amount)
+  CANCELLED   // sender cancelled before confirmation
+}
+
+// NEW: how payment was made
+enum PaymentMethod {
+  UPI
+  CASH
+  BANK_TRANSFER
+  CARD
+  OTHER
+}
+
+// NEW: notification types for deep-linking and categorization
+enum NotificationType {
+  FRIEND_REQUEST
+  FRIEND_ACCEPTED
+  FRIEND_REJECTED
+  EXPENSE_ADDED
+  EXPENSE_UPDATED
+  EXPENSE_DELETED
+  SPLIT_ASSIGNED         // you were added to a split
+  SETTLEMENT_RECEIVED    // someone initiated settlement to you
+  SETTLEMENT_CONFIRMED   // your settlement was confirmed
+  SETTLEMENT_REJECTED    // your settlement was rejected
+  SETTLEMENT_REMINDER    // reminder to pay a debt
+  GROUP_INVITE           // added to a group
+  GROUP_EXPENSE_ADDED    // new expense in your group
+  BUDGET_ALERT_50        // 50% of budget used
+  BUDGET_ALERT_80        // 80% of budget used
+  BUDGET_ALERT_100       // budget fully used / exceeded
+  LOW_BALANCE            // account balance below threshold
+  SYSTEM                 // generic system notification
+}
+
+// NEW: budget period options
+enum BudgetPeriod {
+  WEEKLY
+  MONTHLY
+  YEARLY
+}
+
+// NEW: group lifecycle
+enum GroupStatus {
+  ACTIVE
+  ARCHIVED
+  DELETED
+}
+
+// NEW: group member lifecycle
+enum MemberStatus {
+  ACTIVE
+  LEFT       // voluntarily left
+  REMOVED    // removed by admin
+}
+
+// ============================================================
+// USER
+// ============================================================
+
 model User {
-  id            String   @id @default(uuid())
-  email         String   @unique
-  password      String
-  firstName     String
-  lastName      String
-  phone         String?  @unique
-  avatar        String?
-  currency      String   @default("USD")
-  isEmailVerified Boolean @default(false)
-  isActive      Boolean  @default(true)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id              Int       @id @default(autoincrement())
+  email           String    @unique
+  password        String
+  firstName       String
+  lastName        String
+  phone           String?   @unique
+  avatar          String?                        // Cloudinary URL
+  currency        String    @default("INR")      // default display currency
+  pushToken       String?                        // FCM/APNS push notification token
+  isEmailVerified Boolean   @default(false)
+  isActive        Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
-  // Relations
-  expenses          Expense[]
-  expenseSplits     ExpenseSplit[]
-  settlementsPaid   Settlement[] @relation("SettlementsPaid")
-  settlementsReceived Settlement[] @relation("SettlementsReceived")
-  friendshipsInitiated Friendship[] @relation("FriendshipsInitiated")
-  friendshipsReceived Friendship[] @relation("FriendshipsReceived")
-  groupMemberships  GroupMember[]
-  groupsCreated     Group[]
-  notifications     Notification[]
-  invitesSent       Invite[] @relation("InvitesSent")
-  invitesReceived   Invite[] @relation("InvitesReceived")
-  categories        Category[]
-  activityLogs      ActivityLog[]
-  refreshTokens     RefreshToken[]
+  // relations
+  accounts             Account[]
+  accountTransactions  AccountTransaction[]
+  contacts             Contact[]              @relation("UserContactsOwner")
+  linkedContacts       Contact[]              @relation("UserContactsLinked")
+  expenses             Expense[]              // expenses this user paid
+  expenseSplits        ExpenseSplit[]         // splits assigned to this user
+  expenseComments      ExpenseComment[]
+  groupsCreated        Group[]
+  groupMemberships     GroupMember[]
+  friendshipsInitiated Friendship[]           @relation("FriendshipsInitiated")
+  friendshipsReceived  Friendship[]           @relation("FriendshipsReceived")
+  settlementsPaid      Settlement[]           @relation("SettlementsPaid")
+  settlementsReceived  Settlement[]           @relation("SettlementsReceived")
+  invitesSent          Invite[]               @relation("InvitesSent")
+  invitesReceived      Invite[]               @relation("InvitesReceived")
+  notificationsReceived Notification[]        @relation("NotificationReceiver")
+  notificationsSent    Notification[]         @relation("NotificationSender")
+  categories           Category[]
+  budgets              Budget[]
+  refreshTokens        RefreshToken[]
+  emailVerifications   EmailVerification[]
 
-  @@index([email])
-  @@index([phone])
   @@map("users")
 }
 
-// Refresh Token for JWT
-model RefreshToken {
-  id        String   @id @default(uuid())
+// ============================================================
+// EMAIL VERIFICATION
+// ============================================================
+
+model EmailVerification {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   token     String   @unique
-  userId    String
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([token])
+  @@map("email_verifications")
+}
+
+// ============================================================
+// REFRESH TOKENS
+// ============================================================
+
+model RefreshToken {
+  id        Int      @id @default(autoincrement())
+  token     String   @unique
+  userId    Int
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   expiresAt DateTime
   createdAt DateTime @default(now())
@@ -92,240 +197,373 @@ model RefreshToken {
   @@map("refresh_tokens")
 }
 
-// Friendship Model
+// ============================================================
+// ACCOUNT
+// A user's financial account (bank, UPI, cash, wallet, etc.)
+// ============================================================
+
+model Account {
+  id          Int         @id @default(autoincrement())
+  userId      Int
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name        String                              // e.g. "HDFC Savings", "GPay Wallet"
+  type        AccountType
+  balance     Decimal     @db.Decimal(12, 2)
+  currency    String      @default("INR")
+  isActive    Boolean     @default(true)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  transactions AccountTransaction[]
+
+  @@index([userId])
+  @@unique([userId, name])              // user cannot have two accounts with same name
+  @@map("accounts")
+}
+
+// ============================================================
+// ACCOUNT TRANSACTION
+// Personal financial ledger — income, expense, transfer, settlement
+// This is the ONLY table for personal ledger entries.
+// Expense splits are tracked separately via ExpenseSplit.
+// ============================================================
+
+model AccountTransaction {
+  id              Int             @id @default(autoincrement())
+  userId          Int
+  user            User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accountId       Int
+  account         Account         @relation(fields: [accountId], references: [id])
+  type            TransactionType
+  amount          Decimal         @db.Decimal(12, 2)  // always positive; direction from type
+  description     String?
+  categoryId      Int?                                 // for EXPENSE type entries
+  category        Category?       @relation(fields: [categoryId], references: [id])
+  incomeSource    String?                              // for INCOME type: "Salary", "Freelance", etc.
+  expenseId       Int?                                 // link to expense if this is an expense payment
+  expense         Expense?        @relation(fields: [expenseId], references: [id])
+  settlementId    Int?                                 // link to settlement if type = SETTLEMENT_*
+  settlement      Settlement?     @relation(fields: [settlementId], references: [id])
+  toAccountId     Int?                                 // for TRANSFER: destination account
+  transactionDate DateTime        @default(now())
+  createdAt       DateTime        @default(now())
+
+  @@index([userId])
+  @@index([accountId])
+  @@index([transactionDate])
+  @@map("account_transactions")
+}
+
+// ============================================================
+// CONTACTS (Non-app users that can be added to splits/groups)
+// ============================================================
+
+model Contact {
+  id           Int      @id @default(autoincrement())
+  ownerId      Int
+  owner        User     @relation("UserContactsOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  name         String
+  email        String?
+  phone        String?
+  avatar       String?  // optional avatar for contact
+  linkedUserId Int?                                 // set when contact later joins app
+  linkedUser   User?    @relation("UserContactsLinked", fields: [linkedUserId], references: [id])
+  createdAt    DateTime @default(now())
+
+  groupMembers  GroupMember[]
+  expenseSplits ExpenseSplit[]
+
+  @@index([ownerId])
+  @@map("contacts")
+}
+
+// ============================================================
+// FRIENDSHIPS
+// ============================================================
+
 model Friendship {
-  id        String           @id @default(uuid())
-  requesterId String
-  requester   User           @relation("FriendshipsInitiated", fields: [requesterId], references: [id], onDelete: Cascade)
-  addresseeId String
-  addressee   User           @relation("FriendshipsReceived", fields: [addresseeId], references: [id], onDelete: Cascade)
-  status    FriendshipStatus @default(PENDING)
-  createdAt DateTime         @default(now())
-  updatedAt DateTime         @updatedAt
+  id          Int              @id @default(autoincrement())
+  requesterId Int
+  requester   User             @relation("FriendshipsInitiated", fields: [requesterId], references: [id])
+  addresseeId Int
+  addressee   User             @relation("FriendshipsReceived", fields: [addresseeId], references: [id])
+  status      FriendshipStatus @default(PENDING)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
 
   @@unique([requesterId, addresseeId])
   @@index([requesterId])
   @@index([addresseeId])
-  @@index([status])
   @@map("friendships")
 }
 
-// Group Model
+// ============================================================
+// GROUPS
+// ============================================================
+
 model Group {
-  id          String   @id @default(uuid())
+  id          Int         @id @default(autoincrement())
   name        String
   description String?
-  image       String?
-  createdBy   String
-  creator     User     @relation(fields: [createdBy], references: [id], onDelete: Cascade)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  image       String?     // Cloudinary URL
+  createdBy   Int
+  creator     User        @relation(fields: [createdBy], references: [id])
+  status      GroupStatus @default(ACTIVE)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
 
-  // Relations
-  members     GroupMember[]
-  expenses    Expense[]
+  members  GroupMember[]
+  expenses Expense[]
 
   @@index([createdBy])
   @@map("groups")
 }
 
-// Group Member Model
-model GroupMember {
-  id        String   @id @default(uuid())
-  groupId   String
-  group     Group    @relation(fields: [groupId], references: [id], onDelete: Cascade)
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  isAdmin   Boolean  @default(false)
-  joinedAt  DateTime @default(now())
+// ============================================================
+// GROUP MEMBERS
+// Supports both app users (userId) and non-app contacts (contactId)
+// Exactly one of userId or contactId must be set.
+// ============================================================
 
-  @@unique([groupId, userId])
+model GroupMember {
+  id        Int          @id @default(autoincrement())
+  groupId   Int
+  group     Group        @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  userId    Int?
+  user      User?        @relation(fields: [userId], references: [id])
+  contactId Int?
+  contact   Contact?     @relation(fields: [contactId], references: [id])
+  isAdmin   Boolean      @default(false)
+  status    MemberStatus @default(ACTIVE)
+  joinedAt  DateTime     @default(now())
+  leftAt    DateTime?    // set when status = LEFT or REMOVED
+
   @@index([groupId])
   @@index([userId])
   @@map("group_members")
 }
 
-// Category Model
+// ============================================================
+// CATEGORY
+// userId = null means it's a system-default category visible to all users
+// userId set means it's a user's custom category
+// ============================================================
+
 model Category {
-  id          String   @id @default(uuid())
-  name        String
-  icon        String?
-  color       String?
-  isDefault   Boolean  @default(false)
-  userId      String?
-  user        User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id       Int     @id @default(autoincrement())
+  name     String
+  icon     String?
+  color    String?
+  userId   Int?                         // null = system global default
+  user     User?   @relation(fields: [userId], references: [id])
+  isSystem Boolean @default(false)      // true = cannot be deleted, shipped with app
 
-  // Relations
-  expenses    Expense[]
+  expenses             Expense[]
+  accountTransactions  AccountTransaction[]
+  budgets              Budget[]
 
-  @@index([userId])
   @@map("categories")
 }
 
-// Expense Model
+// ============================================================
+// EXPENSE
+// Core expense record — personal or group
+// ============================================================
+
 model Expense {
-  id          String      @id @default(uuid())
+  id          Int         @id @default(autoincrement())
   description String
-  amount      Decimal     @db.Decimal(10, 2)
-  currency    String      @default("USD")
+  amount      Decimal     @db.Decimal(12, 2)
+  currency    String      @default("INR")
   expenseDate DateTime    @default(now())
-  expenseType ExpenseType @default(PERSONAL)
+  splitType   SplitType
+  expenseType ExpenseType
+  paidById    Int
+  paidBy      User        @relation(fields: [paidById], references: [id])
+  categoryId  Int?
+  category    Category?   @relation(fields: [categoryId], references: [id])
+  groupId     Int?
+  group       Group?      @relation(fields: [groupId], references: [id])
   notes       String?
-  image       String?
-
-  // Split Configuration
-  splitType   SplitType   @default(EQUAL)
-
-  // Relations
-  paidById    String
-  paidBy      User        @relation(fields: [paidById], references: [id], onDelete: Cascade)
-  categoryId  String?
-  category    Category?   @relation(fields: [categoryId], references: [id], onDelete: SetNull)
-  groupId     String?
-  group       Group?      @relation(fields: [groupId], references: [id], onDelete: Cascade)
-
-  // Splits
-  splits      ExpenseSplit[]
-
+  image       String?     // receipt image Cloudinary URL
+  isDeleted   Boolean     @default(false)   // soft delete
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @updatedAt
 
+  splits              ExpenseSplit[]
+  comments            ExpenseComment[]
+  accountTransactions AccountTransaction[]
+
   @@index([paidById])
-  @@index([categoryId])
   @@index([groupId])
   @@index([expenseDate])
   @@map("expenses")
 }
 
-// Expense Split Model
+// ============================================================
+// EXPENSE SPLIT
+// One row per participant in an expense
+// Either userId OR contactId must be set (not both, not neither)
+// ============================================================
+
 model ExpenseSplit {
-  id              String   @id @default(uuid())
-  expenseId       String
-  expense         Expense  @relation(fields: [expenseId], references: [id], onDelete: Cascade)
-  userId          String
-  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id         Int       @id @default(autoincrement())
+  expenseId  Int
+  expense    Expense   @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  userId     Int?
+  user       User?     @relation(fields: [userId], references: [id])
+  contactId  Int?
+  contact    Contact?  @relation(fields: [contactId], references: [id])
+  amount     Decimal   @db.Decimal(12, 2)
+  percentage Decimal?  @db.Decimal(5, 2)  // stored for PERCENTAGE splits
+  shares     Int?                           // stored for SHARES splits
+  isPayer    Boolean   @default(false)      // true = this split belongs to the person who paid
+  isSettled  Boolean   @default(false)
+  settledAt  DateTime?
+  createdAt  DateTime  @default(now())
 
-  // Split amounts
-  amount          Decimal  @db.Decimal(10, 2)
-  percentage      Decimal? @db.Decimal(5, 2)
-  shares          Int?
-
-  // Status
-  isSettled       Boolean  @default(false)
-  settledAt       DateTime?
-
-  // Relations
   settlementSplits SettlementSplit[]
 
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-
-  @@unique([expenseId, userId])
   @@index([expenseId])
   @@index([userId])
-  @@index([isSettled])
   @@map("expense_splits")
 }
 
-// Settlement Model
+// ============================================================
+// EXPENSE COMMENT
+// Comments/notes on an expense by participants
+// ============================================================
+
+model ExpenseComment {
+  id        Int      @id @default(autoincrement())
+  expenseId Int
+  expense   Expense  @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id])
+  text      String
+  createdAt DateTime @default(now())
+
+  @@index([expenseId])
+  @@map("expense_comments")
+}
+
+// ============================================================
+// SETTLEMENT
+// Records a payment from one user to another to clear split debts
+// ============================================================
+
 model Settlement {
-  id              String   @id @default(uuid())
-  fromUserId      String
-  fromUser        User     @relation("SettlementsPaid", fields: [fromUserId], references: [id], onDelete: Cascade)
-  toUserId        String
-  toUser          User     @relation("SettlementsReceived", fields: [toUserId], references: [id], onDelete: Cascade)
-  amount          Decimal  @db.Decimal(10, 2)
-  currency        String   @default("USD")
-  notes           String?
-  settlementDate  DateTime @default(now())
+  id             Int             @id @default(autoincrement())
+  fromUserId     Int
+  fromUser       User            @relation("SettlementsPaid", fields: [fromUserId], references: [id])
+  toUserId       Int
+  toUser         User            @relation("SettlementsReceived", fields: [toUserId], references: [id])
+  amount         Decimal         @db.Decimal(12, 2)
+  currency       String          @default("INR")
+  status         SettlementStatus @default(PENDING)
+  method         PaymentMethod?
+  utrReference   String?         // UPI transaction ID, bank ref, etc.
+  notes          String?
+  settlementDate DateTime        @default(now())
+  confirmedAt    DateTime?       // set when status = CONFIRMED
+  createdAt      DateTime        @default(now())
 
-  // Related splits that are settled by this payment
-  settledSplits   SettlementSplit[]
-
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  settlementSplits SettlementSplit[]
+  accountTransactions AccountTransaction[]
 
   @@index([fromUserId])
   @@index([toUserId])
-  @@index([settlementDate])
   @@map("settlements")
 }
 
-// Settlement Split Link (Many-to-Many between Settlement and ExpenseSplit)
-model SettlementSplit {
-  id              String       @id @default(uuid())
-  settlementId    String
-  settlement      Settlement   @relation(fields: [settlementId], references: [id], onDelete: Cascade)
-  expenseSplitId  String
-  expenseSplit    ExpenseSplit @relation(fields: [expenseSplitId], references: [id], onDelete: Cascade)
-  amount          Decimal      @db.Decimal(10, 2)
-  createdAt       DateTime     @default(now())
+// ============================================================
+// SETTLEMENT SPLIT
+// Junction: links a Settlement to the specific ExpenseSplits it clears
+// ============================================================
 
-  @@unique([settlementId, expenseSplitId])
+model SettlementSplit {
+  id             Int          @id @default(autoincrement())
+  settlementId   Int
+  settlement     Settlement   @relation(fields: [settlementId], references: [id], onDelete: Cascade)
+  expenseSplitId Int
+  expenseSplit   ExpenseSplit @relation(fields: [expenseSplitId], references: [id])
+  amountCleared  Decimal      @db.Decimal(12, 2)
+
   @@index([settlementId])
   @@index([expenseSplitId])
   @@map("settlement_splits")
 }
 
-// Invite Model (for non-registered users)
+// ============================================================
+// BUDGET
+// User-defined spending limits per category per period
+// categoryId = null means it's a total overall spending budget
+// ============================================================
+
+model Budget {
+  id           Int          @id @default(autoincrement())
+  userId       Int
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  categoryId   Int?
+  category     Category?    @relation(fields: [categoryId], references: [id])
+  name         String
+  amount       Decimal      @db.Decimal(12, 2)
+  periodType   BudgetPeriod
+  startDate    DateTime                          // budget period starts here
+  currency     String       @default("INR")
+  alertAt50    Boolean      @default(true)       // notify when 50% used
+  alertAt80    Boolean      @default(true)       // notify when 80% used
+  alertAt100   Boolean      @default(true)       // notify when 100% used / exceeded
+  isActive     Boolean      @default(true)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  @@index([userId])
+  @@map("budgets")
+}
+
+// ============================================================
+// INVITE
+// Invite non-app users to join via email or phone
+// ============================================================
+
 model Invite {
-  id            String       @id @default(uuid())
-  email         String
-  phone         String?
-  invitedById   String
-  invitedBy     User         @relation("InvitesSent", fields: [invitedById], references: [id], onDelete: Cascade)
-
-  // Track if user registered
-  registeredUserId String?
-  registeredUser   User?      @relation("InvitesReceived", fields: [registeredUserId], references: [id], onDelete: SetNull)
-
-  status        InviteStatus @default(PENDING)
-  expiresAt     DateTime
-  createdAt     DateTime     @default(now())
-  updatedAt     DateTime     @updatedAt
+  id               Int          @id @default(autoincrement())
+  email            String?
+  phone            String?
+  invitedById      Int
+  invitedBy        User         @relation("InvitesSent", fields: [invitedById], references: [id])
+  registeredUserId Int?
+  registeredUser   User?        @relation("InvitesReceived", fields: [registeredUserId], references: [id])
+  status           InviteStatus @default(PENDING)
+  expiresAt        DateTime
+  createdAt        DateTime     @default(now())
 
   @@index([invitedById])
-  @@index([email])
-  @@index([status])
   @@map("invites")
 }
 
-// Notification Model
+// ============================================================
+// NOTIFICATION
+// All in-app notifications with type enum for deep-linking
+// ============================================================
+
 model Notification {
-  id          String           @id @default(uuid())
-  userId      String
-  user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  type        NotificationType
-  title       String
-  message     String
-  data        Json?            // Flexible JSON for additional context
-  isRead      Boolean          @default(false)
-  readAt      DateTime?
-  createdAt   DateTime         @default(now())
+  id         Int              @id @default(autoincrement())
+  userId     Int                                     // who receives this notification
+  user       User             @relation("NotificationReceiver", fields: [userId], references: [id], onDelete: Cascade)
+  senderId   Int?                                    // who triggered it (null = system)
+  sender     User?            @relation("NotificationSender", fields: [senderId], references: [id])
+  type       NotificationType
+  title      String
+  message    String
+  entityType String?                                 // "expense" | "group" | "settlement" | "friend" | "budget"
+  entityId   Int?                                    // ID of the entity — used for deep-link navigation
+  metadata   Json?                                   // extra data: {amount, currency, groupName, etc.}
+  isRead     Boolean          @default(false)
+  createdAt  DateTime         @default(now())
 
   @@index([userId])
-  @@index([isRead])
   @@index([createdAt])
   @@map("notifications")
-}
-
-// Activity Log Model
-model ActivityLog {
-  id          String   @id @default(uuid())
-  userId      String
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  action      String   // e.g., "EXPENSE_CREATED", "FRIEND_ADDED"
-  entityType  String   // e.g., "expense", "friendship"
-  entityId    String?
-  metadata    Json?    // Additional context
-  ipAddress   String?
-  userAgent   String?
-  createdAt   DateTime @default(now())
-
-  @@index([userId])
-  @@index([action])
-  @@index([createdAt])
-  @@map("activity_logs")
 }

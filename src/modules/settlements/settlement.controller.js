@@ -83,6 +83,42 @@ class SettlementsController {
       next(error);
     }
   }
+
+  async rejectSettlement(req, res, next) {
+    try {
+      const settlement = await settlementsService.rejectSettlement(
+        req.validatedParams.id,
+        req.user.id
+      );
+      return ApiResponse.success(res, 'Settlement rejected', { settlement });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async cancelSettlement(req, res, next) {
+    try {
+      const settlement = await settlementsService.cancelSettlement(
+        req.validatedParams.id,
+        req.user.id
+      );
+      return ApiResponse.success(res, 'Settlement cancelled', { settlement });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async remindSettlement(req, res, next) {
+    try {
+      await settlementsService.remindSettlement(
+        req.validatedParams.id,
+        req.user.id
+      );
+      return ApiResponse.success(res, 'Reminder sent');
+    } catch (error) {
+      next(error);
+    }
+  }
 }
 
 module.exports = new SettlementsController();

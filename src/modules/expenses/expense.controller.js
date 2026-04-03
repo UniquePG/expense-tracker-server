@@ -1,6 +1,9 @@
 const expensesService = require('./expense.service');
+const cloudinaryService = require('../../utils/cloudinary');
 const ApiResponse = require('../../utils/response');
 const PaginationHelper = require('../../utils/pagination');
+const fs = require('fs');
+const logger = require('../../utils/logger');
 
 class ExpensesController {
   async createExpense(req, res, next) {
@@ -14,12 +17,17 @@ class ExpensesController {
 
   async getExpenses(req, res, next) {
     try {
-      const { page, limit, skip } = PaginationHelper.getPaginationParams(req.query);
+      const query = req.validatedQuery || req.query;
+      const { page, limit, skip } = PaginationHelper.getPaginationParams(query);
       const filters = {
-        groupId: req.query.groupId,
-        categoryId: req.query.categoryId,
-        startDate: req.query.startDate,
-        endDate: req.query.endDate
+        expenseType: query.expenseType,
+        groupId: query.groupId,
+        categoryId: query.categoryId,
+        startDate: query.startDate,
+        endDate: query.endDate,
+        paidByMe: query.paidByMe,
+        owedByMe: query.owedByMe,
+        search: query.search
       };
 
       const { expenses, total } = await expensesService.getUserExpenses(
@@ -89,9 +97,85 @@ class ExpensesController {
 
   async uploadReceipt(req, res, next) {
     try {
-      // Mocked receipt upload as we don't have multer set up here
-      const receiptUrl = await expensesService.uploadReceipt(req.validatedParams.id, req.user.id, req.body);
-      return ApiResponse.success(res, 'Receipt uploaded', { receipt: receiptUrl });
+      // Check if file was uploaded
+      if (!req.file) {
+        return ApiResponse.error(res, 'No file provided', 400);
+      }
+
+      // Get expense to verify ownership and check for existing image
+      const expense = await expensesService.getExpenseById(req.validatedParams.id, req.user.id);
+
+      // Upload to Cloudinary
+      const uploadResult = await cloudinaryService.uploadFile(
+        req.file.path,
+        'splitwise/expenses',
+        `${req.validatedParams.id}-receipt`
+      );
+
+      // Clean up local file
+      if (fs.existsSync(req.file.path)) {
+        fs.unlinkSync(req.file.path);
+      }
+
+      // Delete old image from Cloudinary if it exists
+      if (expense.image) {
+        const oldPublicId = cloudinaryService.extractPublicId(expense.image);
+        if (oldPublicId) {
+          await cloudinaryService.deleteFile(oldPublicId).catch(err => {
+            logger.warn(`Failed to delete old expense image: ${err.message}`);
+          });
+        }
+      }
+
+      // Update expense with new image URL
+      const updatedExpense = await expensesService.updateExpenseImage(
+        req.validatedParams.id,
+        req.user.id,
+        uploadResult.url
+      );
+
+      return ApiResponse.success(res, 'Receipt uploaded successfully', {
+        expense: updatedExpense,
+        fileInfo: {
+          size: uploadResult.size,
+          format: uploadResult.format,
+          width: uploadResult.width,
+          height: uploadResult.height
+        }
+      });
+    } catch (error) {
+      // Clean up local file if upload failed
+      if (req.file && fs.existsSync(req.file.path)) {
+        fs.unlinkSync(req.file.path);
+      }
+      next(error);
+    }
+  }
+
+  async deleteExpenseImage(req, res, next) {
+    try {
+      const expense = await expensesService.getExpenseById(req.validatedParams.id, req.user.id);
+
+      if (!expense.image) {
+        return ApiResponse.error(res, 'No image to delete', 400);
+      }
+
+      // Extract public ID and delete from Cloudinary
+      const publicId = cloudinaryService.extractPublicId(expense.image);
+      if (publicId) {
+        await cloudinaryService.deleteFile(publicId);
+      }
+
+      // Remove image from expense
+      const updatedExpense = await expensesService.updateExpenseImage(
+        req.validatedParams.id,
+        req.user.id,
+        null
+      );
+
+      return ApiResponse.success(res, 'Expense image deleted successfully', {
+        expense: updatedExpense
+      });
     } catch (error) {
       next(error);
     }

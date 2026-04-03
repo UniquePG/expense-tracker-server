@@ -50,10 +50,17 @@ class FriendsService {
     return friendship;
   }
 
-  async sendFriendRequestByEmail(requesterId, email) {
-    const addressee = await prisma.user.findUnique({ where: { email } });
+  async sendFriendRequestByEmail(requesterId, email, phone) {
+    const addressee = await prisma.user.findFirst({
+      where: {
+        OR: [
+          ...(email ? [{ email }] : []),
+          ...(phone ? [{ phone }] : [])
+        ]
+      }
+    });
     if (!addressee) {
-      throw { statusCode: 404, message: 'User not found with this email' };
+      throw { statusCode: 404, message: 'User not found' };
     }
 
     if (requesterId === addressee.id) {
@@ -70,6 +77,9 @@ class FriendsService {
     });
 
     if (existingFriendship) {
+      if (existingFriendship.status === 'BLOCKED') {
+        throw { statusCode: 403, message: 'Cannot send request to a blocked user' };
+      }
       if (existingFriendship.status === 'ACCEPTED') {
         throw { statusCode: 409, message: 'Friend request already pending or users are already friends' };
       }
@@ -92,6 +102,29 @@ class FriendsService {
       status: friendship.status,
       createdAt: friendship.createdAt
     };
+  }
+
+  async blockFriend(userId, friendId) {
+    const friendship = await prisma.friendship.findFirst({
+      where: {
+        OR: [
+          { requesterId: userId, addresseeId: friendId },
+          { requesterId: friendId, addresseeId: userId }
+        ]
+      }
+    });
+
+    if (!friendship) {
+      throw { statusCode: 404, message: 'Friendship not found' };
+    }
+
+    const updated = await prisma.friendship.update({
+      where: { id: friendship.id },
+      data: { status: 'BLOCKED' }
+    });
+
+    logger.info(`Friend blocked: ${userId} -> ${friendId}`);
+    return updated;
   }
 
   async respondToRequest(friendshipId, addresseeId, action) {
@@ -133,7 +166,27 @@ class FriendsService {
       throw { statusCode: 404, message: 'Friendship not found' };
     }
 
-    await prisma.friendship.delete({ where: { id: friendship.id } });
+    const unsettledSplits = await prisma.expenseSplit.count({
+      where: {
+        isSettled: false,
+        expense: {
+          OR: [
+            { paidById: userId, splits: { some: { userId: friendId, isSettled: false } } },
+            { paidById: friendId, splits: { some: { userId, isSettled: false } } }
+          ]
+        }
+      }
+    });
+
+    if (unsettledSplits > 0) {
+      throw { statusCode: 400, message: 'Cannot remove friend with unsettled splits' };
+    }
+
+    await prisma.friendship.update({
+      where: { id: friendship.id },
+      data: { status: 'REJECTED' }
+    });
+
     logger.info(`Friendship removed: ${userId} <-> ${friendId}`);
   }
 

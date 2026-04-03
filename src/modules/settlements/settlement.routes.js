@@ -18,5 +18,8 @@ router.get('/:id', authenticate, validateParams(settlementIdSchema), settlements
 router.put('/:id', authenticate, validateParams(settlementIdSchema), settlementsController.updateSettlement);
 router.delete('/:id', authenticate, validateParams(settlementIdSchema), settlementsController.deleteSettlement);
 router.post('/:id/confirm', authenticate, validateParams(settlementIdSchema), settlementsController.confirmSettlement);
+router.post('/:id/reject', authenticate, validateParams(settlementIdSchema), settlementsController.rejectSettlement);
+router.post('/:id/cancel', authenticate, validateParams(settlementIdSchema), settlementsController.cancelSettlement);
+router.post('/:id/remind', authenticate, validateParams(settlementIdSchema), settlementsController.remindSettlement);
 
 module.exports = router;

@@ -7,6 +7,7 @@ const { createInviteSchema } = require('./invite.validator');
 
 router.post('/', authenticate, validateBody(createInviteSchema), invitesController.createInvite);
 router.get('/', authenticate, invitesController.getUserInvites);
+router.post('/:id/resend', authenticate, invitesController.resendInvite);
 router.get('/pending', authenticate, invitesController.getPendingInvites);
 
 module.exports = router;

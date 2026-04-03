@@ -1,0 +1,2121 @@
+                                                                                                SplitWiseMint API Documentation v2.1.0
+
+
+
+
+                                      SplitWiseMint
+                              Complete API Documentation
+                                Version 2.1.0 (Audited & Corrected) · March 2026
+
+
+
+Version                              2.1.0 — Post-Audit Corrected
+Base URL                             https://api.splitwisemint.com/v1
+Auth                                 Bearer JWT (Authorization header)
+Content-Type                         application/json
+Database                             PostgreSQL + Prisma ORM
+Date                                 March 2026
+
+
+
+                             All protected endpoints require: Authorization: Bearer {accessToken}
+
+
+
+
+           All endpoints require: Authorization: Bearer {accessToken} · Base URL: https://api.splitwisemint.com/v1 · Page 1
+                                                                                               SplitWiseMint API Documentation v2.1.0
+
+
+What Changed in v2.1.0 (Audit Corrections)
+
+   This version corrects gaps identified during audit. Key changes are listed below.
+
+
+
+Critical Additions
+  •   POST /transactions/expense — NEW endpoint for simple personal expense tracking (the biggest missing
+      gap). Allows recording spend with category, date, description directly against an account balance without
+      requiring splits.
+  •   PUT /transactions/:id — NEW endpoint to edit income or expense transaction details (description, date,
+      category, amount).
+  •   expenseType field added to POST /expenses — must send PERSONAL or GROUP. Auto-derived if
+      omitted (groupId present = GROUP, else PERSONAL).
+  •   Personal (solo) expense flow clarified — POST /expenses with just the current user in participants[]
+      creates a self-only expense record (useful for categorised split history). Not required for simple tracking;
+      use POST /transactions/expense instead.
+
+
+Logic Fixes
+  •   AccountTransaction categoryId — documented correctly; expense-type transactions can carry categoryId
+      for category-level analytics.
+  •   POST /expenses payer logic — clarified that paidById can be omitted and defaults to the authenticated
+      user.
+  •   Budget check trigger — clarified it runs against expense_splits for split expenses AND against
+      account_transactions for personal transactions.
+  •   DELETE /accounts/:id — corrected safety check wording; block if unsettled expense_splits reference this
+      account via the linked expense's accountId column.
+
+
+Minor Clarifications
+  •   Section 3 (Accounts): GET /accounts/:id response includes category info on expense-type transactions.
+  •   Section 6 (Expenses): GET /expenses includes both personal and split expenses where user is participant
+      or payer.
+  •   Section 15 (Analytics): income-vs-expense endpoint now correctly documents that personal expenses from
+      account_transactions are included in the expense sum.
+
+
+
+
+          All endpoints require: Authorization: Bearer {accessToken} · Base URL: https://api.splitwisemint.com/v1 · Page 2
+                                                                                               SplitWiseMint API Documentation v2.1.0
+
+
+Table of Contents
+1. Authentication APIs — Register, Login, Refresh, Logout, Email Verify
+2. User Profile APIs — Get Profile, Update, Avatar, Change Password
+3. Account APIs — Create, List, Update, Delete, Balance Summary
+4. Income & Transaction APIs — Add Income, Add Expense (NEW), Transfer, Transaction History, Edit, Delete
+5. Category APIs — System Defaults, Custom Categories, CRUD
+6. Expense APIs — Create, List, Detail, Edit, Delete, Receipt, Comments
+7. Split & Balance APIs — Friend Balances, Group Balances, Simplified Debt
+8. Friend APIs — Request, Accept, Reject, Block, List, Remove
+9. Contact APIs — Add, List, Update, Delete non-app contacts
+10. Group APIs — Create, Members, Expenses, Balance, Settle, Settings
+11. Settlement APIs — Record, Confirm, Reject, Cancel, Remind, History
+12. Budget APIs — Create, Progress, Update, Delete, Alert Settings
+13. Invite APIs — Send Invite, List, Resend
+14. Notification APIs — List, Unread Count, Mark Read, Settings
+15. Analytics & Dashboard APIs — Dashboard, Income vs Expense, Category Breakdown, Trends
+Appendix A — Standard API Conventions
+
+
+
+
+          All endpoints require: Authorization: Bearer {accessToken} · Base URL: https://api.splitwisemint.com/v1 · Page 3
+                                                                                                  SplitWiseMint API Documentation v2.1.0
+
+
+1. Authentication APIs
+All auth routes are public (no JWT required). All other routes require Authorization: Bearer <accessToken>
+header.
+
+
+
+1.1 POST /auth/register
+[POST] /auth/register                 Register a new user account
+Used on screen: Registration Screen
+Purpose: Create a new user account, hash password, issue JWT tokens, send email verification.
+
+
+Request Body
+ Field                      Type                 Required       Validation Rules
+ email                      string               Required       Valid email format. Must be unique across users table.
+ password                   string               Required       Min 8 chars. Must contain: 1 uppercase, 1 lowercase, 1
+                                                                number.
+ firstName                  string               Required       Min 2 chars, max 50 chars. No special characters.
+ lastName                   string               Required       Min 2 chars, max 50 chars.
+ phone                      string               Optional       E.164 format (+91XXXXXXXXXX). Must be unique if
+                                                                provided.
+ currency                   string               Optional       ISO 4217 code (INR, USD, EUR, etc.). Defaults to INR.
+
+
+
+Business Logic (step by step)
+    1.    Check uniqueness: SELECT from users WHERE email = ? OR phone = ?. Return 409 if exists.
+    2.    Hash password using bcrypt (salt rounds = 12).
+    3.    INSERT into users table. Store hashed password, not plain text.
+    4.    Generate: accessToken (JWT, expires 15 min), refreshToken (UUID v4, expires 30 days).
+    5.    INSERT into refresh_tokens (token, userId, expiresAt = now + 30 days).
+    6.    INSERT into email_verifications (userId, token = secure random hex, expiresAt = now + 24h).
+    7.    Send verification email with link: https://app.splitwisemint.com/verify?token=X
+    8.    System categories are global (isSystem=true, userId=null) — no INSERT needed per user, fetched
+          globally.
+
+Tables Used: users → refresh_tokens → email_verifications
+
+
+Response — 201 Created
+    { "success": true, "message": "Account created. Please verify your email.",
+      "data": { "user": { "id": "uuid", "email": "john@gmail.com", "firstName": "John",
+        "lastName": "Doe", "currency": "INR", "isEmailVerified": false },
+      "accessToken": "eyJ...", "refreshToken": "550e8400-..." } }
+
+
+
+Error Responses
+ Status             Code                          Condition
+ 409 Conflict       EMAIL_EXISTS                  Email already registered
+
+             All endpoints require: Authorization: Bearer {accessToken} · Base URL: https://api.splitwisemint.com/v1 · Page 4
+                                                                                                 SplitWiseMint API Documentation v2.1.0
+
+ 409 Conflict      PHONE_EXISTS                  Phone number already registered
+ 422               VALIDATION_ERROR              Any field fails validation rules
+
+
+
+
+1.2 GET /auth/verify-email
+[GET] /auth/verify-email?token={token}                               Verify user email address
+Purpose: Confirm user owns the email. Enables full app access.
+
+Business Logic
+   9. Find token in email_verifications WHERE token = ? AND expiresAt > now AND usedAt IS NULL.
+   10. UPDATE users SET isEmailVerified = true WHERE id = verification.userId.
+   11. UPDATE email_verifications SET usedAt = now().
+   12. Return success. App shows "Email verified!" screen.
+Tables Used: email_verifications → users
+
+
+
+1.3 POST /auth/resend-verification
+[POST] /auth/resend-verification                           Resend email verification link
+ Field                     Type                 Required        Validation Rules
+ email                     string               Required        Must match a registered but unverified user.
+
+Business Logic
+   13. Find user by email. Return 404 if not found.
+   14. If already verified, return 400 "already verified".
+   15. Invalidate old tokens: DELETE from email_verifications WHERE userId = ? AND usedAt IS NULL.
+   16. INSERT new email_verifications row (new token, expiresAt = now + 24h).
+   17. Send new verification email. Rate-limit: max 3 resends per hour per email.
+Tables Used: users → email_verifications
+
+
+
+1.4 POST /auth/login
+[POST] /auth/login              Authenticate user and issue tokens
+ Field                     Type                 Required        Validation Rules
+ email                     string               Required        Registered user email.
+ password                  string               Required        User's password.
+ pushToken                 string               Optional        Device FCM/APNS token for push notifications. Updated
+                                                                on every login.
+
+Business Logic
+   18. Find user by email. Return generic 401 (don't reveal if email exists).
+   19. Check isActive = true. Return 403 with 'Account deactivated' if false.
+   20. Compare password with bcrypt.compare(). Return 401 on mismatch.
+   21. If pushToken provided, UPDATE users SET pushToken = ?
+   22. Generate new accessToken (JWT, 15 min) and refreshToken (UUID, 30 days).
+   23. INSERT into refresh_tokens. Old tokens remain valid (multi-device support).
+Tables Used: users → refresh_tokens
+
+            All endpoints require: Authorization: Bearer {accessToken} · Base URL: https://api.splitwisemint.com/v1 · Page 5
+                                                                                                   SplitWiseMint API Documentation v2.1.0
+
+
+
+
+1.5 POST /auth/refresh
+[POST] /auth/refresh                  Get new access token using refresh token
+Used by: Axios interceptor — automatic token refresh when accessToken expires (401 response).
+ Field                      Type                  Required      Validation Rules
+ refreshToken               string                Required      Valid refresh token previously issued.
+
+Business Logic (Token Rotation)
+   24. Find token in refresh_tokens WHERE token = ? AND expiresAt > now(). Return 401 if not found/expired.
+   25. DELETE old refresh_token row (rotation — prevents reuse).
+   26. Generate new accessToken (15 min) and new refreshToken (30 days).
+   27. INSERT new refresh_tokens row.
+   28. Return both new tokens.
+Tables Used: refresh_tokens → users
+
+
+
+1.6 POST /auth/logout
+[POST] /auth/logout                  Invalidate current session (requires Auth)
+ Field                      Type                  Required      Validation Rules
+ refreshToken               string                Required      The current device refresh token to invalidate.
+ logoutAll                  boolean               Optional      If true, invalidate all sessions for this user (all devices).
+
+Business Logic
+   29. If logoutAll=true: DELETE FROM refresh_tokens WHERE userId = currentUser.id
+   30. Else: DELETE FROM refresh_tokens WHERE token = body.refreshToken
+   31. UPDATE users SET pushToken = null (if logging out of all devices)
+   32. Return 200. Client should clear local token storage.
+Tables Used: refresh_tokens
+
+
+
+1.7 POST /auth/forgot-password
+[POST] /auth/forgot-password                        Request password reset email
+ Field                      Type                  Required      Validation Rules
+ email                      string                Required      Registered email address.
+
+Business Logic
+    33. Always return 200 (don't reveal if email exists — security). If user found:
+        ◦ Generate secure random reset token. Store in email_verifications. expiresAt = now + 1h.
+        ◦ Send reset email with link.
+    34. On link click: verify token, show new password form.
+
+
+
+1.8 POST /auth/reset-password
+[POST] /auth/reset-password                       Set new password via reset token
+
+
+             All endpoints require: Authorization: Bearer {accessToken} · Base URL: https://api.splitwisemint.com/v1 · Page 6
+                                                                                               SplitWiseMint API Documentation v2.1.0
+
+ Field                   Type                 Required       Validation Rules
+ token                   string               Required       Reset token from email link.
+ newPassword             string               Required       Min 8 chars, 1 uppercase, 1 lowercase, 1 number.
+
+Business Logic
+   35. Verify token in email_verifications. Return 400 if invalid/expired.
+   36. Hash new password. UPDATE users SET password = hashedPassword.
+   37. Mark token used. DELETE all refresh_tokens for this user (force re-login everywhere).
+Tables Used: email_verifications → users → refresh_tokens
+
+
+
+
+          All endpoints require: Authorization: Bearer {accessToken} · Base URL: https://api.splitwisemint.com/v1 · Page 7
+                                                                                                  SplitWiseMint API Documentation v2.1.0
+
+
+2. User Profile APIs
+2.1 GET /users/me
+[GET] /users/me            Get current user full profile
+Used on screen: Profile Screen, Dashboard Header, App startup
+
+Business Logic
+   38. Extract userId from JWT claims.
+   39. SELECT from users WHERE id = userId. Exclude password field.
+Tables Used: users
+
+
+Response — 200 OK
+    { "success": true, "data": { "id": "uuid", "email": "john@gmail.com",
+      "firstName": "John", "lastName": "Doe", "phone": "+911234567890",
+      "avatar": "https://res.cloudinary.com/...", "currency": "INR",
+      "isEmailVerified": true, "isActive": true, "createdAt": "2026-01-15T10:00:00Z" } }
+
+
+
+2.2 PUT /users/me
+[PUT] /users/me            Update current user profile
+Used on screen: Edit Profile Screen
+ Field                      Type                 Required       Validation Rules
+ firstName                  string               Optional       Min 2, max 50 chars.
+ lastName                   string               Optional       Min 2, max 50 chars.
+ phone                      string               Optional       E.164 format. Must be unique if changed.
+ currency                   string               Optional       ISO 4217 currency code. Changes display throughout
+                                                                app.
+
+Business Logic
+   40. Validate fields. If phone changing: check uniqueness in users.
+   41. UPDATE users SET ...fields, updatedAt = now() WHERE id = userId.
+   42. Return updated user object. Client updates Zustand userStore.
+Tables Used: users
+
+
+
+2.3 POST /users/avatar
+[POST] /users/avatar                 Upload or replace profile avatar
+Request: Content-Type: multipart/form-data | Field: avatar (image/jpeg or image/png, max 5MB)
+
+Business Logic
+    43. Validate file: type must be image/jpeg or image/png. Size ≤ 5MB.
+    44. If user already has avatar: delete old Cloudinary asset (store publicId when uploading).
+    45. Upload to Cloudinary with folder: 'splitwisemint/avatars/{userId}'.
+    46. UPDATE users SET avatar = cloudinaryUrl WHERE id = userId.
+    47. Return new avatar URL.
+
+
+             All endpoints require: Authorization: Bearer {accessToken} · Base URL: https://api.splitwisemint.com/v1 · Page 8
+                                                                                                 SplitWiseMint API Documentation v2.1.0
+
+Tables Used: users
+
+
+
+2.4 POST /users/change-password
+[POST] /users/change-password                       Change password (requires current password)
+ Field                           Type                Required       Validation Rules
+ currentPassword                 string              Required       Current account password.
+ newPassword                     string              Required       Min 8 chars, 1 upper, 1 lower, 1 number. Must differ
+                                                                    from current.
+
+Business Logic
+   48. Fetch user including password hash from users.
+   49. bcrypt.compare(currentPassword, hash). Return 400 if mismatch.
+   50. Hash new password. UPDATE users SET password = newHash.
+   51. DELETE FROM refresh_tokens WHERE userId = ? (force re-login on all devices).
+Tables Used: users → refresh_tokens
+
+
+
+2.5 DELETE /users/me
+[DELETE] /users/me             Deactivate account (soft delete)
+    ⚠ WARNING: Do NOT hard-delete users. This breaks historical data (expenses, splits, settlements). Soft-delete
+    only.
+
+Business Logic
+   52. Check for unsettled splits where userId = me and isSettled = false. Return 400 with details — user must
+       settle debts first.
+   53. UPDATE users SET isActive = false, email = 'deleted_{uuid}@deleted.com', phone = null, pushToken =
+       null.
+   54. DELETE FROM refresh_tokens WHERE userId = me.
+   55. Send account deletion confirmation email.
+Tables Used: users → refresh_tokens → expense_splits
+
+
+
+
+            All endpoints require: Authorization: Bearer {accessToken} · Base URL: https://api.splitwisemint.com/v1 · Page 9
+                                                                                                  SplitWiseMint API Documentation v2.1.0
+
+
+3. Account Management APIs
+    Account balance MUST always be kept in sync with account_transactions. Never update balance without creating a
+    transaction record.
+
+
+
+3.1 POST /accounts
+[POST] /accounts             Create a new financial account
+ Field                      Type                Required       Validation Rules
+ name                       string              Required       Account display name (e.g. 'HDFC Savings', 'GPay
+                                                               Wallet'). Max 100 chars. Unique per user.
+ type                       string              Required       One of: CASH, BANK, CREDIT_CARD, WALLET, UPI
+ balance                    number              Required       Initial balance. Can be negative (credit card).
+                                                               Decimal(12,2).
+ currency                   string              Optional       ISO 4217. Defaults to user's currency preference.
+
+Business Logic
+   56. Validate uniqueness: SELECT from accounts WHERE userId = me AND LOWER(name) = LOWER(?).
+       Return 409 if exists.
+   57. INSERT into accounts. Balance is the opening balance.
+   58. INSERT into account_transactions: type=INCOME, amount=|initialBalance|, description='Opening
+       balance'. For negative credit balance: type=EXPENSE, amount=|balance|.
+Tables Used: accounts → account_transactions
+
+
+Response — 201 Created
+    { "success": true, "data": { "id": "uuid", "name": "HDFC Savings", "type": "BANK",
+      "balance": "50000.00", "currency": "INR", "createdAt": "2026-03-15T10:00:00Z" } }
+
+
+
+3.2 GET /accounts
+[GET] /accounts            List all user accounts with balances
+Used on screen: Dashboard (balance widget), Account List Screen
+Business Logic: SELECT from accounts WHERE userId = me AND isActive = true ORDER BY createdAt ASC.
+Tables Used: accounts
+
+
+
+3.3 GET /accounts/balance/total
+[GET] /accounts/balance/total                       Get total balance across all accounts
+Used on screen: Dashboard — Total Balance Widget
+
+Business Logic
+   59. SELECT accounts WHERE userId = me AND isActive = true.
+   60. Group by currency. SUM balance per currency group.
+   61. If all same currency: return single totalBalance. If multiple currencies: return breakdown per currency (DO
+       NOT add them — currencies cannot be mixed without exchange rates).
+Tables Used: accounts
+
+
+            All endpoints require: Authorization: Bearer {accessToken} · Base URL: https://api.splitwisemint.com/v1 · Page 10
+                                                                                                   SplitWiseMint API Documentation v2.1.0
+
+
+
+
+3.4 GET /accounts/:id
+[GET] /accounts/:id                    Get single account with recent transactions
+
+Query Parameters
+ Param                 Type                Default        Description
+ page                  integer             1              Pagination page for transactions
+ limit                 integer             20             Transactions per page (max 50)
+ type                  string              all            Filter: INCOME | EXPENSE | TRANSFER | SETTLEMENT_OUT
+                                                          | SETTLEMENT_IN
+ startDate             date                —              ISO date string. Filter transactions from this date.
+ endDate               date                —              ISO date string. Filter transactions to this date.
+
+Business Logic
+   62. Verify account belongs to current user. Return 403 if not.
+   63. SELECT from accounts for account data.
+   64. SELECT from account_transactions WHERE accountId = ? with pagination + filters. JOIN categories (for
+       EXPENSE-type transactions that have categoryId). ORDER BY transactionDate DESC.
+Tables Used: accounts → account_transactions → categories
+
+
+
+3.5 PUT /accounts/:id
+[PUT] /accounts/:id                    Update account name or type
+ Field                        Type                   Required     Validation Rules
+ name                         string                 Optional     New display name. Uniqueness check per user.
+ type                         string                 Optional     New account type enum.
+     DO NOT allow direct balance update here. Balance is derived from transactions. Use POST /accounts/:id/adjust for
+     corrections.
+Tables Used: accounts
+
+
+
+3.6 POST /accounts/:id/adjust
+[POST] /accounts/:id/adjust                          Manually adjust account balance (creates audit transaction)
+ Field                        Type                   Required     Validation Rules
+ newBalance                   number                 Required     The correct current balance. Server calculates the
+                                                                  difference.
+ note                         string                 Optional     Reason for adjustment (e.g. 'Bank sync correction').
+
+Business Logic
+     65. Read current accounts.balance.
+     66. difference = newBalance - currentBalance.
+     67. If difference > 0: INSERT account_transactions (type=INCOME, amount=difference, description='Balance
+         adjustment: ' + note).
+     68. If difference < 0: INSERT account_transactions (type=EXPENSE, amount=|difference|,
+         description='Balance adjustment: ' + note).
+
+             All endpoints require: Authorization: Bearer {accessToken} · Base URL: https://api.splitwisemint.com/v1 · Page 11
+                                                                                                SplitWiseMint API Documentation v2.1.0
+
+   69. UPDATE accounts SET balance = newBalance. (Both in DB transaction — atomic.)
+Tables Used: accounts → account_transactions
+
+
+
+3.7 DELETE /accounts/:id
+[DELETE] /accounts/:id               Remove an account (with safety checks)
+
+Business Logic
+   70. Check 1: Are there expenses with accountId = this account that have unsettled expense_splits? Block
+       deletion if yes.
+   71. Check 2: If balance ≠ 0, warn user and require confirmation parameter.
+   72. Soft delete: UPDATE accounts SET isActive = false.
+   73. Historical transactions remain for audit purposes.
+Tables Used: accounts → expenses → expense_splits
+
+
+
+
+          All endpoints require: Authorization: Bearer {accessToken} · Base URL: https://api.splitwisemint.com/v1 · Page 12
+                                                                                                   SplitWiseMint API Documentation v2.1.0
+
+
+4. Income & Transaction APIs
+    These APIs manage the personal financial ledger. All income/expense/transfer entries update the linked account
+    balance atomically. This is the core personal finance management section — the most important section for simple
+    day-to-day tracking.
+
+
+The two primary personal finance actions are:
+   • POST /transactions/income — Record money coming IN to an account.
+   • POST /transactions/expense — Record money going OUT from an account. (NEW — critical MVP feature)
+
+
+
+4.1 POST /transactions/income
+[POST] /transactions/income                       Record income into an account
+Used on screen: Add Income Screen
+ Field                         Type                 Required       Validation Rules
+ accountId                     string (uuid)        Required       Target account to credit income into.
+ amount                        number               Required       Income amount. Must be > 0. Decimal(12,2).
+ categoryId                    string (uuid)        Optional       Category tag for this income (e.g., a custom "Salary"
+                                                                   category). Must belong to system or current user.
+ incomeSource                  string               Optional       Label: Salary | Freelance | Business | Rental | Gift |
+                                                                   Interest | Dividend | Refund | Other. Free text also
+                                                                   accepted.
+ description                   string               Optional       Optional custom description. Max 255 chars.
+ transactionDate               datetime             Optional       When income was received. Defaults to now(). Must
+                                                                   not be a future date.
+
+Income Source Suggestions (quick-select chips in UI)
+Salary | Freelance/Contract | Business Income | Rental Income | Investment Return | Gift | Interest | Tax Refund |
+Bonus | Other
+
+
+Business Logic (Atomic — DB Transaction)
+   74. Verify accountId belongs to current user. Return 403 if not.
+   75. BEGIN TRANSACTION.
+   76. INSERT into account_transactions: { userId, accountId, type=INCOME, amount, categoryId,
+       incomeSource, description, transactionDate }.
+   77. UPDATE accounts SET balance = balance + amount, updatedAt = now() WHERE id = accountId.
+   78. COMMIT. Return the created transaction.
+   79. ROLLBACK on any error.
+Tables Used: account_transactions → accounts
+
+
+Response — 201 Created
+    { "success": true, "data": { "transaction": { "id": "uuid", "type": "INCOME",
+      "amount": "150000.00", "incomeSource": "Salary", "description": "March salary",
+      "transactionDate": "2026-03-01T10:00:00Z",
+      "account": { "id": "uuid", "name": "HDFC Savings", "balance": "200000.00" } } } }
+
+
+
+
+             All endpoints require: Authorization: Bearer {accessToken} · Base URL: https://api.splitwisemint.com/v1 · Page 13
+                                                                                                   SplitWiseMint API Documentation v2.1.0
+
+
+4.2 POST /transactions/expense
+[POST] /transactions/expense                       Record a personal expense from an account ✦ NEW
+    ✦ This is a NEW endpoint added in v2.1.0. It was missing from v2.0.0 and is the primary way a user records simple
+    personal spending (like groceries, fuel, a coffee) directly against an account balance without any bill-splitting.
+
+
+Used on screen: Add Expense Screen (personal finance view), Quick Add Expense button
+Purpose: The simplest way to record "I spent ₹X on Y today." Deducts from account, categorises, and feeds
+budget tracking. No splits involved.
+
+
+ Field                         Type                 Required       Validation Rules
+ accountId                     string (uuid)        Required       Account to deduct expense from. Must belong to
+                                                                   current user.
+ amount                        number               Required       Expense amount. Must be > 0. Decimal(12,2).
+ categoryId                    string (uuid)        Optional       Category for this expense. Must belong to system or
+                                                                   current user. Strongly recommended for budget
+                                                                   tracking.
+ description                   string               Optional       What was spent on. Max 255 chars. e.g., "Lunch at
+                                                                   Haldirams".
+ transactionDate               datetime             Optional       When the expense occurred. Defaults to now().
+                                                                   Cannot be more than 1 year in the past.
+
+
+
+Business Logic (Atomic — DB Transaction)
+    80. Verify accountId belongs to current user. Return 403 if not.
+    81. Validate amount > 0.
+    82. If categoryId provided: verify it belongs to system (isSystem=true) or current user.
+    83. BEGIN TRANSACTION.
+    84. INSERT into account_transactions: { userId, accountId, type=EXPENSE, amount, categoryId, description,
+        transactionDate }.
+    85. UPDATE accounts SET balance = balance - amount, updatedAt = now() WHERE id = accountId.
+    86. COMMIT. Return the created transaction.
+    87. ROLLBACK on any error.
+    88. After commit (async): run budget check for this user (see Section 12.6). If categoryId matches an active
+        budget and threshold crossed, fire BUDGET_ALERT notification.
+
+Tables Used: account_transactions → accounts → budgets → notifications
+
+
+Response — 201 Created
+    { "success": true, "data": { "transaction": { "id": "uuid", "type": "EXPENSE",
+      "amount": "450.00", "description": "Lunch at Haldirams",
+      "transactionDate": "2026-03-22T13:00:00Z",
+         "category": { "id": "uuid", "name": "Food & Dining", "icon": "🍔" },
+         "account": { "id": "uuid", "name": "HDFC Savings", "balance": "49550.00" } } } }
+
+
+
+Error Responses
+ Status             Code                              Condition
+ 400                INVALID_AMOUNT                    Amount is 0 or negative
+
+             All endpoints require: Authorization: Bearer {accessToken} · Base URL: https://api.splitwisemint.com/v1 · Page 14
+                                                                                                   SplitWiseMint API Documentation v2.1.0
+
+ 403                ACCOUNT_NOT_OWNED                 accountId does not belong to current user
+ 404                CATEGORY_NOT_FOUND                categoryId does not exist or is not accessible to user
+
+
+
+
+4.3 POST /transactions/transfer
+[POST] /transactions/transfer                        Transfer money between own accounts
+Used on screen: Transfer Screen
+ Field                           Type               Required       Validation Rules
+ fromAccountId                   string (uuid)      Required       Source account. Must belong to current user.
+ toAccountId                     string (uuid)      Required       Destination account. Must belong to current user.
+                                                                   Must differ from fromAccountId.
+ amount                          number             Required       Transfer amount > 0.
+ description                     string             Optional       Transfer note. Max 255 chars.
+ transactionDate                 datetime           Optional       Defaults to now().
+
+Business Logic (Atomic)
+   89. Verify both accounts belong to current user.
+   90. Validate fromAccountId ≠ toAccountId.
+   91. BEGIN TRANSACTION:
+       ◦ INSERT account_transactions: type=EXPENSE, accountId=fromAccount, description='Transfer out:
+          '+description, toAccountId=toAccountId.
+       ◦ INSERT account_transactions: type=INCOME, accountId=toAccount, description='Transfer in from:
+          '+fromAccount.name, toAccountId=fromAccountId.
+       ◦ UPDATE accounts SET balance = balance - amount WHERE id = fromAccountId.
+       ◦ UPDATE accounts SET balance = balance + amount WHERE id = toAccountId.
+   92. COMMIT.
+Tables Used: account_transactions → accounts
+
+
+
+4.4 GET /transactions
+[GET] /transactions                 Get paginated transaction history (all accounts)
+Used on screen: Transaction List Screen, Transaction History
+
+Query Parameters
+ Param                 Type               Default       Description
+ page                  integer            1             Page number
+ limit                 integer            20            Results per page (max 100)
+ accountId             uuid               —             Filter to single account
+ type                  string             —             INCOME | EXPENSE | TRANSFER | SETTLEMENT_OUT |
+                                                        SETTLEMENT_IN
+ categoryId            uuid               —             Filter by category
+ startDate             date               —             From date (ISO format)
+ endDate               date               —             To date (ISO format)
+ search                string             —             Search in description field
+
+Business Logic
+
+             All endpoints require: Authorization: Bearer {accessToken} · Base URL: https://api.splitwisemint.com/v1 · Page 15
+                                                                                                 SplitWiseMint API Documentation v2.1.0
+
+SELECT from account_transactions WHERE userId = me + applied filters. JOIN categories, accounts. ORDER
+BY transactionDate DESC. Return with pagination metadata.
+Tables Used: account_transactions → accounts → categories
+
+
+
+4.5 PUT /transactions/:id
+[PUT] /transactions/:id                 Edit a transaction ✦ NEW
+    ✦ NEW in v2.1.0. Allows editing manually created INCOME and EXPENSE transactions. TRANSFER,
+    SETTLEMENT_IN, SETTLEMENT_OUT cannot be edited (system-generated).
+ Field                       Type                 Required       Validation Rules
+ description                 string               Optional       Updated description.
+ categoryId                  string (uuid)        Optional       Updated category. Pass null to remove category.
+ transactionDate             datetime             Optional       Updated date.
+ incomeSource                string               Optional       Updated income source (INCOME type only).
+ amount                      number               Optional       Updated amount. Will reverse old balance impact and
+                                                                 apply new one.
+
+Business Logic (Atomic)
+   93. Verify transaction belongs to current user. Return 403 if not.
+   94. Check type is INCOME or EXPENSE. Return 400 if trying to edit TRANSFER, SETTLEMENT_IN, or
+       SETTLEMENT_OUT.
+   95. If amount is changing:
+       ◦ difference = newAmount - oldAmount.
+       ◦ If INCOME: UPDATE accounts SET balance = balance + difference.
+       ◦ If EXPENSE: UPDATE accounts SET balance = balance - difference.
+   96. UPDATE account_transactions SET description/categoryId/transactionDate/incomeSource/amount as
+       provided.
+   97. All account balance changes atomic with transaction update.
+Tables Used: account_transactions → accounts
+
+
+
+4.6 DELETE /transactions/:id
+[DELETE] /transactions/:id                    Delete a manually added transaction (with balance reversal)
+    Only allow deletion of manually created INCOME/EXPENSE transactions. Do NOT allow deletion of
+    SETTLEMENT_IN, SETTLEMENT_OUT — these are system-generated and deleting would cause balance
+    inconsistency.
+
+Business Logic
+   98. Verify transaction belongs to current user.
+   99. Check type is not SETTLEMENT_IN or SETTLEMENT_OUT. Return 400 if restricted.
+   100.         Reverse balance: if INCOME → balance -= amount. If EXPENSE → balance += amount.
+   101.         DELETE from account_transactions WHERE id = ?. UPDATE accounts balance. Atomic.
+Tables Used: account_transactions → accounts
+
+
+
+
+           All endpoints require: Authorization: Bearer {accessToken} · Base URL: https://api.splitwisemint.com/v1 · Page 16
+                                                                                                   SplitWiseMint API Documentation v2.1.0
+
+
+5. Category APIs
+Categories tag expenses and personal transactions, and drive budget tracking. Two types: system defaults
+(isSystem=true, userId=null, visible to all) and user-created custom categories.
+
+
+
+5.1 GET /categories
+[GET] /categories              Get all categories (system + user custom)
+Used on screen: Add Expense Screen (category picker), Add Personal Expense Screen, Budget Setup Screen
+Business Logic: SELECT from categories WHERE isSystem = true OR userId = me. ORDER BY isSystem DESC,
+name ASC.
+Returns system categories first, then user custom categories.
+Tables Used: categories
+
+
+System Default Categories (seeded on app initialization)
+ Name                                                          Icon                       Color
+ Food & Dining                                                 🍔                          #FF6B6B
+
+ Groceries                                                     🛒                          #4ECDC4
+
+ Transportation                                                🚗                          #45B7D1
+
+ Entertainment                                                 🎭                          #96CEB4
+
+ Bills & Utilities                                             💡                          #FFEAA7
+
+ Shopping                                                      🛍                          #DDA0DD
+
+ Health & Medical                                              🏥                          #98FB98
+
+ Travel                                                        ✈️                         #87CEEB
+
+ Rent & Housing                                                🏠                          #F0E68C
+
+ Personal Care                                                 💆                          #FFB6C1
+
+ Education                                                     📚                          #20B2AA
+
+ Business                                                      💼                          #778899
+
+ Investment                                                    📈                          #3CB371
+
+ Gifts                                                         🎁                          #FF69B4
+
+ Others                                                        📋                          #808080
+
+
+
+
+5.2 POST /categories
+[POST] /categories               Create a custom category
+ Field                       Type                Required       Validation Rules
+ name                        string              Required       Category name. Max 50 chars. Unique per user (case-
+                                                                insensitive).
+ icon                        string              Optional       Emoji or icon identifier. Max 10 chars.
+ color                       string              Optional       Hex color code (#RRGGBB format).
+
+
+
+             All endpoints require: Authorization: Bearer {accessToken} · Base URL: https://api.splitwisemint.com/v1 · Page 17
+                                                                                                SplitWiseMint API Documentation v2.1.0
+
+Business Logic: Check name uniqueness against system + user categories. INSERT into categories: { name,
+icon, color, userId=me, isSystem=false }.
+Tables Used: categories
+
+
+
+5.3 PUT /categories/:id
+[PUT] /categories/:id               Update a custom category
+Business Logic: Verify category belongs to current user AND isSystem = false. Cannot edit system categories
+(return 403). UPDATE categories SET name/icon/color.
+Tables Used: categories
+
+
+
+5.4 DELETE /categories/:id
+[DELETE] /categories/:id                 Delete a custom category
+Business Logic: Cannot delete system categories. If category has linked expenses, budgets, or
+account_transactions: set those to categoryId = null (uncategorized) OR return 400 asking user to reassign first.
+DELETE from categories.
+Tables Used: categories → expenses → budgets → account_transactions
+
+
+
+
+          All endpoints require: Authorization: Bearer {accessToken} · Base URL: https://api.splitwisemint.com/v1 · Page 18
+                                                                                                   SplitWiseMint API Documentation v2.1.0
+
+
+6. Expense APIs
+    Expenses are the split-billing core feature. Use POST /transactions/expense (Section 4.2) for simple personal
+    spending. Use POST /expenses when you need to split an amount with friends/contacts or track a group expense.
+
+
+Creating an expense ALWAYS creates expense_split rows for each participant. The payer's own split is auto-
+marked as settled (isPayer=true, isSettled=true). Account balance updates are atomic.
+
+
+SPLIT CALCULATION RULES (Applied Server-Side)
+   •     EQUAL: splitAmount = ROUND(totalAmount / count, 2). Remainder goes to payer's split.
+   •     PERCENTAGE: splitAmount = ROUND(totalAmount × percentage / 100, 2). Sum must equal 100
+         (validated).
+   •     EXACT: Use provided amounts directly. Validate SUM = totalAmount exactly.
+   •     SHARES: totalShares = SUM(all). Each amount = ROUND(totalAmount × shares / totalShares, 2).
+         Remainder to payer.
+   •     Payer's split: Always isPayer=true and isSettled=true (they already paid).
+   •     Others' splits: isSettled=false, settledAt=null until settled.
+
+
+
+6.1 POST /expenses
+[POST] /expenses              Create a new split expense (with optional personal solo mode)
+Used on screen: Create Split Expense Screen, Add Group Expense Screen
+
+
+ Field                       Type                Required       Validation Rules
+ description                 string              Required       Expense name/description. Max 255 chars.
+ amount                      number              Required       Total amount paid. Must be > 0. Decimal(12,2).
+ currency                    string              Optional       ISO 4217. Defaults to user's currency.
+ paidById                    uuid                Optional       Who paid. Defaults to current user if omitted. If set to
+                                                                another user, they must be an accepted friend.
+ expenseDate                 datetime            Optional       When the expense happened. Defaults to now(). Cannot
+                                                                be more than 1 year in the past.
+ expenseType                 string              Optional       PERSONAL or GROUP. Auto-derived if omitted:
+                                                                GROUP if groupId is present, else PERSONAL.
+ splitType                   string              Required       EQUAL | PERCENTAGE | EXACT | SHARES
+ categoryId                  uuid                Optional       Category for this expense. Must exist and belong to
+                                                                system or current user.
+ groupId                     uuid                Optional       If group expense. Must be a group current user belongs
+                                                                to.
+ notes                       string              Optional       Additional notes. Max 500 chars.
+ accountId                   uuid                Optional       If linked to an account — deducts from account balance
+                                                                atomically.
+ participants                array               Required       Array of split participants. Min 1 element (can be just
+                                                                yourself for solo tracking). See participant schema
+                                                                below.
+
+
+
+Participant Object Schema (inside participants array)
+
+             All endpoints require: Authorization: Bearer {accessToken} · Base URL: https://api.splitwisemint.com/v1 · Page 19
+                                                                                                   SplitWiseMint API Documentation v2.1.0
+
+ Field                       Type                    Rules
+ userId                      uuid                    App user participant. Either userId OR contactId, never both.
+ contactId                   uuid                    Non-app contact participant. Must be a contact owned by current
+                                                     user.
+ percentage                  number (0-100)          Required when splitType=PERCENTAGE. Sum of all must = 100.
+ amount                      number                  Required when splitType=EXACT. Sum must = total expense
+                                                     amount.
+ shares                      integer                 Required when splitType=SHARES. Must be positive integer (≥ 1).
+
+
+
+Solo Personal Expense via POST /expenses
+    If participants contains only the current user (e.g., [{ "userId": "me-uuid" }]), this creates a PERSONAL expense
+    tracked in the split history with expenseType=PERSONAL. The payer's split is isSettled=true. This is useful when
+    you want categorised expense history with receipt images but no splitting. For simple quick spending, prefer POST
+    /transactions/expense (Section 4.2).
+
+
+
+Example Request Bodies
+Equal split (restaurant dinner):
+    { "description": "Dinner at Barbeque Nation", "amount": 2400,
+      "paidById": "john-uuid", "splitType": "EQUAL",
+      "categoryId": "food-category-uuid",
+      "participants": [ { "userId": "john-uuid" }, { "userId": "alice-uuid" },
+        { "contactId": "bob-contact-uuid" } ] }
+
+
+Percentage split:
+    { "description": "Grocery Shopping", "amount": 1000,
+      "paidById": "alice-uuid", "splitType": "PERCENTAGE",
+      "participants": [ { "userId": "alice-uuid", "percentage": 40 },
+        { "userId": "john-uuid", "percentage": 60 } ] }
+
+
+
+Business Logic (ALL in single DB transaction — atomic)
+Step 1 — Input Validation:
+   • Validate all required fields.
+   • If groupId provided: verify current user is a member. Verify all participant userIds/contactIds are group
+      members.
+   • If paidById ≠ currentUser: verify the payer is a friend (friendship status=ACCEPTED). Payer must be in
+      participants array.
+   • If PERCENTAGE: validate SUM(percentages) = 100. Return 422 if not.
+   • If EXACT: validate SUM(amounts) = expense.amount. Return 422 if even 1 paisa off.
+   • Validate no duplicate userIds or contactIds in participants array.
+   • Derive expenseType: if groupId present → GROUP, else → PERSONAL.
+
+Step 2 — Calculate splits (server-side):
+   • Run the appropriate algorithm (see top of section). Generate {userId/contactId, amount, percentage?,
+      shares?, isPayer, isSettled} for each participant.
+   • Payer participant: set isPayer=true, isSettled=true.
+
+Step 3 — DB Writes (atomic BEGIN/COMMIT):
+
+
+             All endpoints require: Authorization: Bearer {accessToken} · Base URL: https://api.splitwisemint.com/v1 · Page 20
+                                                                                                  SplitWiseMint API Documentation v2.1.0
+
+    •    INSERT into expenses (with expenseType) → get expenseId.
+    •    INSERT into expense_splits — one row per participant (including payer).
+    •    If accountId provided: INSERT account_transactions (type=EXPENSE, expenseId linked) + UPDATE
+         accounts balance -= amount.
+    •    For each non-payer participant who is an app user: INSERT into notifications (type=SPLIT_ASSIGNED).
+
+Step 4 — Budget Check (async, post-commit):
+   • For each participant (including payer), run budget check: query budgets for active budgets matching
+      categoryId/period. If threshold crossed (50/80/100%), INSERT BUDGET_ALERT notifications.
+
+Tables Used: expenses → expense_splits → account_transactions → accounts → notifications → budgets
+
+
+Response — 201 Created
+     { "success": true, "data": { "expense": { "id": "uuid",
+       "description": "Dinner at Barbeque Nation", "amount": "2400.00",
+       "expenseType": "PERSONAL", "splitType": "EQUAL",
+       "paidBy": { "id": "john-uuid", "firstName": "John" },
+       "category": { "id": "uuid", "name": "Food & Dining", "icon": "🍔" },
+       "splits": [
+         { "id": "uuid", "user": { "id": "john-uuid" }, "amount": "800.00", "isPayer": true,
+     "isSettled": true },
+         { "id": "uuid", "user": { "id": "alice-uuid" }, "amount": "800.00", "isPayer": false,
+     "isSettled": false },
+         { "id": "uuid", "contact": { "id": "bob-contact-uuid" }, "amount": "800.00",
+     "isPayer": false, "isSettled": false }
+       ], "totalOwedToMe": "1600.00" } } }
+
+
+
+Error Responses
+ Status            Code                                     Condition
+ 403               NOT_GROUP_MEMBER                         Current user is not member of provided groupId
+ 403               PARTICIPANT_NOT_IN_GROUP                 A participant is not a member of the group
+ 422               PERCENTAGE_SUM_INVALID                   Percentages don't sum to 100
+ 422               EXACT_SUM_INVALID                        Exact amounts don't sum to total
+ 422               DUPLICATE_PARTICIPANT                    Same user/contact listed twice
+ 422               PAYER_NOT_IN_PARTICIPANTS                paidById not in participants list
+
+
+
+
+6.2 GET /expenses
+[GET] /expenses            List all expenses for current user
+Used on screen: Dashboard (recent expenses), Expense List Screen
+
+Query Parameters
+ Param                Type             Default         Description
+ page                 integer          1               Pagination
+ limit                integer          20              Results per page (max 50)
+ expenseType          string           —               PERSONAL | GROUP — filter by expense type
+
+
+            All endpoints require: Authorization: Bearer {accessToken} · Base URL: https://api.splitwisemint.com/v1 · Page 21
+                                                                                                     SplitWiseMint API Documentation v2.1.0
+
+ groupId               uuid                —                Filter by group (null = personal only)
+ categoryId            uuid                —                Filter by category
+ startDate             date                —                From date
+ endDate               date                —                To date
+ paidByMe              boolean             —                Only expenses I paid for
+ owedByMe              boolean             —                Only expenses where I have unsettled split
+ search                string              —                Search in description
+Business Logic: SELECT expenses WHERE user is in expense_splits OR paidById = me. Apply filters. JOIN
+category, paidBy user, splits. ORDER BY expenseDate DESC.
+Tables Used: expenses → expense_splits → categories → users
+
+
+
+6.3 GET /expenses/:id
+[GET] /expenses/:id                    Get full expense detail with all splits
+Business Logic: Verify user has access (in expense_splits OR paidById = me). SELECT expense + all splits +
+comments + category + group info.
+Tables Used: expenses → expense_splits → expense_comments → categories → users → contacts → groups
+
+
+
+6.4 PUT /expenses/:id
+[PUT] /expenses/:id                    Edit an expense (payer only)
+    Only the payer (paidById = me) can edit. Editing amount or participants recalculates ALL splits — existing splits
+    deleted and reinserted. Notify all affected participants.
+ Field                        Type                   Required       Validation Rules
+ description                  string                 Optional       Updated description.
+ amount                       number                 Optional       Updated amount (triggers split recalculation).
+ categoryId                   uuid                   Optional       Updated category.
+ notes                        string                 Optional       Updated notes.
+ expenseDate                  datetime               Optional       Updated date.
+ participants                 array                  Optional       If provided, replaces all existing splits. Same schema as
+                                                                    POST.
+ splitType                    string                 Optional       Updated split type (required if participants provided).
+
+Business Logic
+   102.        Verify paidById = current user. Return 403 if not.
+   103.        If amount or participants changed: DELETE existing expense_splits. Recalculate. INSERT new
+       splits.
+   104.        If accountId-linked transaction exists and amount changed: UPDATE account_transactions
+       amount + resync accounts balance (atomic).
+   105.        INSERT notifications (type=EXPENSE_UPDATED) for all affected split participants.
+Tables Used: expenses → expense_splits → account_transactions → accounts → notifications
+
+
+
+6.5 DELETE /expenses/:id
+[DELETE] /expenses/:id                      Soft-delete an expense (payer only)
+
+
+             All endpoints require: Authorization: Bearer {accessToken} · Base URL: https://api.splitwisemint.com/v1 · Page 22
+                                                                                                SplitWiseMint API Documentation v2.1.0
+
+Business Logic
+   106.        Only payer can delete.
+   107.        Check if any splits are already settled. If yes, return 400 — cannot delete settled expenses.
+   108.        Soft delete: UPDATE expenses SET isDeleted = true. Splits remain for historical reference.
+   109.        If account-linked: reverse the account_transaction. UPDATE account balance (atomic).
+   110.        Notify all participants (type=EXPENSE_DELETED).
+Tables Used: expenses → expense_splits → account_transactions → accounts → notifications
+
+
+
+6.6 POST /expenses/:id/receipt
+[POST] /expenses/:id/receipt                    Upload receipt image for an expense
+Request: Content-Type: multipart/form-data | Field: receipt (image/jpeg or image/png, max 10MB)
+
+Business Logic
+   111.        Verify user is payer or participant of the expense.
+   112.        Upload to Cloudinary folder 'splitwisemint/receipts/{expenseId}'.
+   113.        UPDATE expenses SET image = cloudinaryUrl.
+Tables Used: expenses
+
+
+
+6.7 POST /expenses/:id/comments
+[POST] /expenses/:id/comments                     Add a comment to an expense
+ Field                    Type                Required       Validation Rules
+ text                     string              Required       Comment text. Max 500 chars. Min 1 char.
+
+Business Logic
+   114.        Verify user is a participant (in expense_splits) of this expense.
+   115.        INSERT into expense_comments: { expenseId, userId, text }.
+   116.        Notify all other app-user participants via notifications.
+Tables Used: expense_comments → expense_splits → notifications
+
+
+
+6.8 GET /expenses/:id/comments
+[GET] /expenses/:id/comments                    Get all comments for an expense
+SELECT from expense_comments WHERE expenseId = ? JOIN users. ORDER BY createdAt ASC.
+Tables Used: expense_comments → users
+
+
+
+6.9 GET /expenses/summary
+[GET] /expenses/summary                Get expense summary stats for current user
+Used on screen: Dashboard — Summary Widget
+
+Business Logic
+    117.        totalPaid: SUM(expenses.amount) WHERE paidById = me AND isDeleted = false.
+    118.        totalOwedToMe: SUM(expense_splits.amount) WHERE expense.paidById = me AND isSettled =
+        false AND userId ≠ me.
+
+
+          All endpoints require: Authorization: Bearer {accessToken} · Base URL: https://api.splitwisemint.com/v1 · Page 23
+                                                                                               SplitWiseMint API Documentation v2.1.0
+
+   119.        totalIOwed: SUM(expense_splits.amount) WHERE split.userId = me AND isSettled = false AND
+       expense.paidById ≠ me.
+   120.        netBalance = totalOwedToMe - totalIOwed.
+Tables Used: expenses → expense_splits
+
+
+Response — 200 OK
+   { "data": { "totalPaid": "12500.00", "totalOwedToMe": "3200.00",
+     "totalIOwed": "850.00", "netBalance": "2350.00" } }
+
+
+
+
+         All endpoints require: Authorization: Bearer {accessToken} · Base URL: https://api.splitwisemint.com/v1 · Page 24
+                                                                                                SplitWiseMint API Documentation v2.1.0
+
+
+7. Split & Balance APIs
+Read-only calculation APIs. Compute balances from the expense_splits table in real time. No writing — pure
+aggregation.
+
+
+
+7.1 GET /splits/balances
+[GET] /splits/balances                Get balance summary with all friends
+Used on screen: Dashboard balance card, Friends Screen balance list
+
+Business Logic — Correct Query
+For each friend, calculate:
+   • theyOweMe: SUM(es.amount) FROM expense_splits es JOIN expenses e WHERE es.userId = friend.id
+      AND e.paidById = me AND es.isSettled = false
+   • iOweThem: SUM(es.amount) FROM expense_splits es JOIN expenses e WHERE es.userId = me AND
+      e.paidById = friend.id AND es.isSettled = false
+   • netBalance: theyOweMe - iOweThem. Positive = they owe me. Negative = I owe them.
+Tables Used: expense_splits → expenses → friendships → users
+
+
+
+7.2 GET /splits/balances/simplified
+[GET] /splits/balances/simplified                        Get minimum transactions to settle all debts
+
+Debt Simplification Algorithm
+   121.        Build net balance array: [{userId, netBalance}] where positive = owed to them, negative = they
+       owe others.
+   122.        Separate into creditors (positive net) and debtors (negative net).
+   123.        While creditors and debtors both have entries: take largest creditor (C) and largest debtor (D).
+       settleAmount = MIN(|C.balance|, |D.balance|). Output: "D pays C: settleAmount". Reduce both balances.
+       Remove if zero.
+   124.        Return the minimum list of payment instructions.
+Tables Used: expense_splits → expenses → users
+
+
+
+7.3 GET /splits/expense/:expenseId
+[GET] /splits/expense/:expenseId                        Get splits for a specific expense
+SELECT from expense_splits WHERE expenseId = ? JOIN users, contacts. Return with isSettled status.
+Tables Used: expense_splits → users → contacts
+
+
+
+
+          All endpoints require: Authorization: Bearer {accessToken} · Base URL: https://api.splitwisemint.com/v1 · Page 25
+                                                                                               SplitWiseMint API Documentation v2.1.0
+
+
+8. Friend Management APIs
+8.1 POST /friends/request
+[POST] /friends/request               Send a friend request
+ Field                   Type                Required       Validation Rules
+ email                   string              Optional       Find user by email. Either email or phone required.
+ phone                   string              Optional       Find user by phone number (E.164 format).
+
+Business Logic
+   125.         Find target user by email or phone in users. Return 404 if not found.
+   126.         Target must not be current user. Return 400 if self.
+   127.         Check existing friendship: SELECT from friendships WHERE (requesterId=me AND
+       addresseeId=target) OR (requesterId=target AND addresseeId=me).
+   128.         If BLOCKED: return 403. If PENDING: return 409 already sent. If ACCEPTED: return 409 already
+       friends.
+   129.         INSERT into friendships: { requesterId=me, addresseeId=target.id, status=PENDING }.
+   130.         INSERT into notifications: { userId=target.id, senderId=me, type=FRIEND_REQUEST }.
+Tables Used: users → friendships → notifications
+
+
+
+8.2 GET /friends/pending
+[GET] /friends/pending               Get pending incoming friend requests
+SELECT from friendships WHERE addresseeId = me AND status = PENDING. JOIN users on requesterId.
+Tables Used: friendships → users
+
+
+
+8.3 POST /friends/requests/:requestId/accept
+[POST] /friends/requests/:requestId/accept                               Accept a friend request
+
+Business Logic
+   131.         Verify friendship exists AND addresseeId = me AND status = PENDING.
+   132.         UPDATE friendships SET status = ACCEPTED, updatedAt = now().
+   133.         INSERT notifications: { userId=requester.id, senderId=me, type=FRIEND_ACCEPTED }.
+Tables Used: friendships → notifications
+
+
+
+8.4 POST /friends/requests/:requestId/reject
+[POST] /friends/requests/:requestId/reject                               Reject a friend request
+Verify addresseeId = me AND status = PENDING. UPDATE friendships SET status = REJECTED. No notification
+sent to requester on rejection.
+Tables Used: friendships
+
+
+
+8.5 GET /friends
+[GET] /friends        Get list of all accepted friends
+
+
+         All endpoints require: Authorization: Bearer {accessToken} · Base URL: https://api.splitwisemint.com/v1 · Page 26
+                                                                                                SplitWiseMint API Documentation v2.1.0
+
+ Param                    Type                Description
+ search                   string              Search friends by name or email
+ page                     integer             Pagination page
+ limit                    integer             Results per page (default 50)
+Business Logic: SELECT from friendships WHERE (requesterId=me OR addresseeId=me) AND
+status=ACCEPTED. JOIN users to get the other party profile.
+Tables Used: friendships → users
+
+
+
+8.6 GET /friends/:friendId
+[GET] /friends/:friendId                 Get friend profile and shared expense history
+
+Business Logic
+   134.         Verify friendship status = ACCEPTED.
+   135.         Get friend's profile from users.
+   136.         Calculate current balance between the two users (see Section 7.1 logic).
+   137.         Get last 5 shared expenses (expenses where both appear in expense_splits).
+Tables Used: friendships → users → expenses → expense_splits
+
+
+
+8.7 POST /friends/:friendId/block
+[POST] /friends/:friendId/block                       Block a user
+Find friendship between current user and target. UPDATE status = BLOCKED. Blocked users cannot send friend
+requests or be added to expenses with blocker.
+Tables Used: friendships
+
+
+
+8.8 DELETE /friends/:friendId
+[DELETE] /friends/:friendId                   Remove a friend
+
+Business Logic
+   138.         Check for unsettled splits between the two users. Return 400 with list if any — must settle first.
+   139.         UPDATE friendships SET status = REJECTED (removes friendship). Or soft-delete the row.
+   140.         Historical shared expense data is preserved.
+Tables Used: friendships → expense_splits → expenses
+
+
+
+8.9 GET /friends/balances
+[GET] /friends/balances                Get balance owed/owing per friend
+See Section 7.1 — GET /splits/balances for the detailed query logic. This is an alias that returns the same data in
+the same format.
+Tables Used: expense_splits → expenses → friendships → users
+
+
+
+
+          All endpoints require: Authorization: Bearer {accessToken} · Base URL: https://api.splitwisemint.com/v1 · Page 27
+                                                                                                SplitWiseMint API Documentation v2.1.0
+
+
+9. Contact Management APIs
+Contacts are non-app users (e.g. a roommate who doesn't use the app). They can be added to splits and groups.
+When a contact later joins the app, their linkedUserId is set and splits get migrated.
+
+
+
+9.1 POST /contacts
+[POST] /contacts           Add a new contact (non-app user)
+ Field                    Type                 Required      Validation Rules
+ name                     string               Required      Contact's name. Max 100 chars.
+ email                    string               Optional      Contact's email. If matches an app user, suggest friend
+                                                             request instead.
+ phone                    string               Optional      Contact's phone number.
+
+Business Logic
+   141.         Check if email/phone matches an existing users record. If yes: suggest sending friend request
+       instead.
+   142.         INSERT into contacts: { ownerId=me, name, email, phone, linkedUserId=null }.
+Tables Used: contacts → users
+
+
+
+9.2 GET /contacts
+[GET] /contacts          List all contacts
+Query Parameters: search — filter by name/email/phone
+Business Logic: SELECT from contacts WHERE ownerId = me ORDER BY name ASC. Include balance info per
+contact (SUM of their unsettled splits).
+Tables Used: contacts → expense_splits
+
+
+
+9.3 PUT /contacts/:id
+[PUT] /contacts/:id                Update a contact
+ Field                    Type                 Required      Validation Rules
+ name                     string               Optional      Updated name.
+ email                    string               Optional      Updated email.
+ phone                    string               Optional      Updated phone.
+Tables Used: contacts
+
+
+
+9.4 DELETE /contacts/:id
+[DELETE] /contacts/:id                 Remove a contact
+
+Business Logic
+    143.       Check for unsettled expense_splits WHERE contactId = this contact. Return 400 if any exist.
+    144.       DELETE from contacts. Cascade removes from group_members and expense_splits per Prisma
+        cascade config.
+
+
+          All endpoints require: Authorization: Bearer {accessToken} · Base URL: https://api.splitwisemint.com/v1 · Page 28
+                                                                                                SplitWiseMint API Documentation v2.1.0
+
+Tables Used: contacts → expense_splits → group_members
+
+
+
+9.5 POST /contacts/:id/link
+[POST] /contacts/:id/link                  Link a contact to their app user account
+Used when: A contact joins the app — their splits get migrated to their user account.
+ Field                    Type                Required       Validation Rules
+ userId                   uuid                Required       The app user ID to link this contact to.
+
+Business Logic
+   145.         Verify the userId exists and is an accepted friend of current user.
+   146.         UPDATE contacts SET linkedUserId = userId.
+   147.         Migrate: UPDATE expense_splits SET userId = userId, contactId = null WHERE contactId = this
+       contact.
+   148.         Migrate: UPDATE group_members SET userId = userId, contactId = null WHERE contactId = this
+       contact.
+Tables Used: contacts → expense_splits → group_members → users
+
+
+
+
+          All endpoints require: Authorization: Bearer {accessToken} · Base URL: https://api.splitwisemint.com/v1 · Page 29
+                                                                                                   SplitWiseMint API Documentation v2.1.0
+
+
+10. Group Management APIs
+Groups organise expenses around events (trips, households). Any member can add expenses; only admins can
+change group settings or remove other members.
+
+
+
+10.1 POST /groups
+[POST] /groups            Create a new group
+ Field                       Type                Required       Validation Rules
+ name                        string              Required       Group name. Max 100 chars.
+ description                 string              Optional       Group description. Max 500 chars.
+
+Business Logic
+   149.        INSERT into groups: { name, description, createdBy=me, status=ACTIVE }.
+   150.        INSERT into group_members: { groupId, userId=me, isAdmin=true, status=ACTIVE } — creator is
+       auto-added as admin.
+Tables Used: groups → group_members
+
+
+
+10.2 GET /groups
+[GET] /groups           Get all groups current user belongs to
+Business Logic: SELECT groups WHERE id IN (SELECT groupId FROM group_members WHERE userId = me
+AND status = ACTIVE). Include member count, latest expense, and my net balance in that group.
+Tables Used: groups → group_members → expenses → expense_splits
+
+
+
+10.3 GET /groups/:id
+[GET] /groups/:id              Get group detail with members and recent expenses
+
+Business Logic
+   151.        Verify current user is a member.
+   152.        SELECT group + all active members (JOIN users, contacts) + last 10 expenses + group balance
+       summary.
+Tables Used: groups → group_members → users → contacts → expenses → expense_splits
+
+
+
+10.4 POST /groups/:id/members
+[POST] /groups/:id/members                      Add a member to a group
+ Field                       Type                Required       Validation Rules
+ userId                      uuid                Optional       App user to add. Must be a friend of current user.
+ contactId                   uuid                Optional       Non-app contact to add. Must be a contact owned by
+                                                                current user.
+
+Business Logic
+    153.       Verify current user is member (restrict to admins for adding or allow all members —
+        implementation choice).
+
+             All endpoints require: Authorization: Bearer {accessToken} · Base URL: https://api.splitwisemint.com/v1 · Page 30
+                                                                                               SplitWiseMint API Documentation v2.1.0
+
+   154.        Check not already a member: SELECT from group_members WHERE groupId = ? AND (userId =
+       ? OR contactId = ?) AND status = ACTIVE.
+   155.        INSERT into group_members: { groupId, userId/contactId, isAdmin=false, status=ACTIVE }.
+   156.        If app user (userId): INSERT notifications: { userId=added user, type=GROUP_INVITE }.
+Tables Used: groups → group_members → notifications
+
+
+
+10.5 DELETE /groups/:id/members/:memberId
+[DELETE] /groups/:id/members/:memberId                           Remove a member from a group
+
+Business Logic
+   157.        Only group admins can remove other members. Members can remove themselves (leave group).
+   158.        UPDATE group_members SET status = REMOVED, leftAt = now() (if removed by admin) or
+       status = LEFT (if self-leaving).
+   159.        Historical expense_splits REMAIN for audit trail.
+Tables Used: group_members
+
+
+
+10.6 GET /groups/:id/members
+[GET] /groups/:id/members                 Get all members of a group
+SELECT from group_members WHERE groupId = ? AND status = ACTIVE. JOIN users (for app users) and
+contacts (for non-app users).
+Tables Used: group_members → users → contacts
+
+
+
+10.7 GET /groups/:id/expenses
+[GET] /groups/:id/expenses                  Get all expenses for a group
+
+Query Parameters
+page, limit, categoryId, startDate, endDate, paidById
+Business Logic: SELECT from expenses WHERE groupId = ? AND isDeleted = false. JOIN splits, paidBy user,
+category. ORDER BY expenseDate DESC.
+Tables Used: expenses → expense_splits → users → contacts → categories
+
+
+
+10.8 GET /groups/:id/balances
+[GET] /groups/:id/balances                  Get balance summary for all group members
+
+Business Logic — Correct Calculation
+For each group member:
+   • totalPaid: SUM(expenses.amount) WHERE paidById = member AND groupId = this group AND isDeleted
+       = false
+   • totalOwes: SUM(expense_splits.amount) WHERE expense_splits.userId = member AND
+       expenses.groupId = this group AND isSettled = false
+   • balance: totalPaid - totalOwes
+   • Positive balance: group owes this member. Negative: this member owes the group.
+Also return simplified settlement instructions (same debt simplification algorithm as Section 7.2).
+Tables Used: expenses → expense_splits → group_members → users → contacts
+
+         All endpoints require: Authorization: Bearer {accessToken} · Base URL: https://api.splitwisemint.com/v1 · Page 31
+                                                                                                 SplitWiseMint API Documentation v2.1.0
+
+
+
+
+10.9 POST /groups/:id/image
+[POST] /groups/:id/image                  Upload group photo
+Request: multipart/form-data, field: image, max 5MB, image/jpeg or image/png. Upload to Cloudinary. UPDATE
+groups SET image = url.
+Tables Used: groups
+
+
+
+10.10 PUT /groups/:id
+[PUT] /groups/:id            Update group settings (admin only)
+ Field                     Type                Required       Validation Rules
+ name                      string              Optional       New group name.
+ description               string              Optional       New description.
+ status                    string              Optional       ACTIVE | ARCHIVED. Archive when trip/event is over.
+Verify current user is group admin. UPDATE groups SET ...fields.
+Tables Used: groups → group_members
+
+
+
+10.11 POST /groups/:id/settle
+[POST] /groups/:id/settle                   Mark all group splits as settled (admin only)
+    ⚠ Marks ALL unsettled expense_splits for this group as isSettled=true in bulk. Use only when all payments are
+    confirmed outside the app (e.g., everyone settled in cash). This CANNOT be undone.
+
+Business Logic
+   160.        Verify current user is group admin.
+   161.        UPDATE expense_splits SET isSettled=true, settledAt=now() WHERE expenseId IN (SELECT id
+       FROM expenses WHERE groupId = ? AND isDeleted = false) AND isSettled = false.
+   162.        Notify all group members.
+Tables Used: expense_splits → expenses → notifications → group_members
+
+
+
+10.12 PUT /groups/:id/members/:memberId/admin
+[PUT] /groups/:id/members/:memberId/admin                                Toggle admin status (admin only)
+ Field                     Type                Required       Validation Rules
+ isAdmin                   boolean             Required       true to grant admin, false to revoke.
+Verify current user is admin. Cannot remove own admin if only admin. UPDATE group_members SET isAdmin =
+body.isAdmin.
+Tables Used: group_members
+
+
+
+
+           All endpoints require: Authorization: Bearer {accessToken} · Base URL: https://api.splitwisemint.com/v1 · Page 32
+                                                                                                   SplitWiseMint API Documentation v2.1.0
+
+
+11. Settlement APIs
+Settlements record actual payments between users to clear split debts. Flow: initiate (PENDING) → receiver
+confirms (CONFIRMED) → splits auto-marked settled.
+
+
+
+11.1 POST /settlements
+[POST] /settlements                Record a payment to settle a debt
+Used on screen: Settle Debt Screen, Balance Screen → Settle button
+ Field                         Type                 Required       Validation Rules
+ toUserId                      uuid                 Required       The user receiving the payment (who is owed money).
+ amount                        number               Required       Amount being paid. Must be > 0. Must not exceed
+                                                                   outstanding balance.
+ method                        string               Optional       UPI | CASH | BANK_TRANSFER | CARD | OTHER
+ utrReference                  string               Optional       Payment reference ID (UPI transaction ID, bank ref).
+                                                                   Max 100 chars.
+ notes                         string               Optional       Payment notes. Max 255 chars.
+ expenseSplitIds               array of uuid        Optional       Specific split IDs this payment covers. If not provided,
+                                                                   server auto-matches by FIFO (oldest first).
+
+Business Logic (Atomic DB Transaction)
+   163.        Verify toUserId is an accepted friend of current user.
+   164.        Validate amount: calculate total outstanding debt from me to toUserId using balance query
+       (Section 7.1). Amount must not exceed this.
+   165.        BEGIN TRANSACTION:
+       ◦ INSERT into settlements: { fromUserId=me, toUserId, amount, method, utrReference, status=PENDING }.
+       ◦ If expenseSplitIds provided: INSERT into settlement_splits one row per split.
+       ◦ If NOT provided: auto-select unsettled splits WHERE userId=me AND expense.paidById=toUserId ORDER
+          BY expense.expenseDate ASC (FIFO). INSERT into settlement_splits.
+       ◦ INSERT notifications: { userId=toUserId, type=SETTLEMENT_RECEIVED, message='{myName} has sent
+          ₹{amount} — please confirm receipt' }.
+   166.        COMMIT.
+Tables Used: settlements → settlement_splits → expense_splits → expenses → notifications
+
+
+
+11.2 POST /settlements/:id/confirm
+[POST] /settlements/:id/confirm                          Confirm receipt of a settlement payment
+Only the payment RECEIVER (toUserId) can confirm. Current user must be toUserId.
+
+Business Logic (Atomic)
+    167.            Verify settlement.toUserId = me AND status = PENDING.
+    168.            BEGIN TRANSACTION:
+       ◦      UPDATE settlements SET status=CONFIRMED, confirmedAt=now().
+       ◦      UPDATE expense_splits SET isSettled=true, settledAt=now() WHERE id IN (SELECT expenseSplitId
+              FROM settlement_splits WHERE settlementId = ?).
+         ◦    INSERT account_transactions for fromUser's account (if linked): type=SETTLEMENT_OUT, amount,
+              settlementId. UPDATE accounts balance -= amount.
+         ◦    INSERT account_transactions for toUser's account: type=SETTLEMENT_IN, amount, settlementId.
+              UPDATE accounts balance += amount.
+
+             All endpoints require: Authorization: Bearer {accessToken} · Base URL: https://api.splitwisemint.com/v1 · Page 33
+                                                                                                    SplitWiseMint API Documentation v2.1.0
+
+          ◦    INSERT notifications: { userId=fromUserId, type=SETTLEMENT_CONFIRMED, message='{myName}
+               confirmed your payment of ₹{amount}' }.
+     169.      COMMIT.
+Tables Used: settlements → settlement_splits → expense_splits → account_transactions → accounts →
+notifications
+
+
+
+11.3 POST /settlements/:id/reject
+[POST] /settlements/:id/reject                          Reject a settlement payment (receiver only)
+ Field                        Type                Required       Validation Rules
+ reason                       string              Optional       Reason for rejection. Max 255 chars.
+
+Business Logic
+   170.        Verify settlement.toUserId = me AND status = PENDING.
+   171.        UPDATE settlements SET status=REJECTED.
+   172.        Notify sender: { userId=fromUserId, type=SETTLEMENT_REJECTED, message='Your payment
+       was rejected: {reason}' }.
+   173.        Splits remain unsettled.
+Tables Used: settlements → notifications
+
+
+
+11.4 POST /settlements/:id/cancel
+[POST] /settlements/:id/cancel                          Cancel a settlement (sender only, while PENDING)
+Verify settlement.fromUserId = me AND status = PENDING. UPDATE settlements SET status=CANCELLED. No
+split changes — splits remain unsettled.
+Tables Used: settlements
+
+
+
+11.5 POST /settlements/:id/remind
+[POST] /settlements/:id/remind                          Send a payment reminder to a debtor
+    Rate limited: max 1 reminder per 24 hours per (me → friend) pair. Return 429 if too frequent.
+ Field                        Type                Required       Validation Rules
+ toUserId                     uuid                Required       The user to remind.
+ amount                       number              Optional       Amount to mention in reminder. Defaults to their total
+                                                                 outstanding balance.
+ message                      string              Optional       Custom reminder message. Max 200 chars.
+
+Business Logic
+   174.        Verify the recipient (toUserId) has unsettled splits where expense.paidById = me.
+   175.        Check last reminder time. If < 24h, return 429.
+   176.        INSERT notifications: { userId=debtorId, senderId=me, type=SETTLEMENT_REMINDER,
+       message='{myName} is reminding you to settle ₹{amount}' }.
+Tables Used: notifications → expense_splits → expenses
+
+
+
+11.6 GET /settlements
+
+              All endpoints require: Authorization: Bearer {accessToken} · Base URL: https://api.splitwisemint.com/v1 · Page 34
+                                                                                                   SplitWiseMint API Documentation v2.1.0
+
+[GET] /settlements               Get settlement history (sent and received)
+
+Query Parameters
+ Param                       Type                Description
+ status                      string              PENDING | CONFIRMED | REJECTED | CANCELLED (all if not
+                                                 specified)
+ direction                   string              sent | received | both (default: both)
+ page                        integer             Pagination
+ limit                       integer             Results per page (default 20)
+Business Logic: SELECT from settlements WHERE (fromUserId = me OR toUserId = me) + filters. JOIN users.
+ORDER BY settlementDate DESC.
+Tables Used: settlements → settlement_splits → users
+
+
+
+11.7 GET /settlements/:id
+[GET] /settlements/:id                   Get single settlement detail
+Return settlement + settlement_splits (which specific expense_splits it clears) + fromUser/toUser profiles.
+Tables Used: settlements → settlement_splits → expense_splits → expenses → users
+
+
+
+
+             All endpoints require: Authorization: Bearer {accessToken} · Base URL: https://api.splitwisemint.com/v1 · Page 35
+                                                                                                    SplitWiseMint API Documentation v2.1.0
+
+
+12. Budget Management APIs
+Budgets let users set spending limits per period (WEEKLY/MONTHLY/YEARLY), optionally per category. The
+system checks budget progress when new expenses (both split and personal) are created and triggers
+notifications at 50%, 80%, and 100% thresholds.
+
+
+
+12.1 POST /budgets
+[POST] /budgets              Create a new budget
+ Field                        Type                Required       Validation Rules
+ name                         string              Required       Budget name. e.g. 'Monthly Groceries'. Max 100 chars.
+ amount                       number              Required       Budget limit amount. Must be > 0.
+ periodType                   string              Required       WEEKLY | MONTHLY | YEARLY
+ startDate                    date                Required       Budget period start date (ISO date). For MONTHLY: first
+                                                                 day of month.
+ categoryId                   uuid                Optional       If null: total overall spending budget. If set: category-
+                                                                 specific budget.
+ currency                     string              Optional       Defaults to user's currency.
+ alertAt50                    boolean             Optional       Notify at 50% usage. Default: true.
+ alertAt80                    boolean             Optional       Notify at 80% usage. Default: true.
+ alertAt100                   boolean             Optional       Notify at 100% usage/exceeded. Default: true.
+
+Business Logic
+   177.        Validate period consistency (MONTHLY startDate should be 1st of month, etc.).
+   178.        Check for conflicting budgets: user should not have two active budgets for same category+period
+       overlapping. Return 409 if conflict.
+   179.        INSERT into budgets.
+Tables Used: budgets → categories
+
+
+
+12.2 GET /budgets
+[GET] /budgets             Get all active budgets with current progress
+
+Business Logic — Progress Calculation
+For each budget, calculate current period spend from BOTH sources:
+   • Source 1 — Split expenses: SELECT SUM(es.amount) FROM expense_splits es JOIN expenses e
+      WHERE es.userId = me AND e.expenseDate IN period AND es.isSettled = false AND (categoryId matches
+      if set).
+   • Source 2 — Personal transactions: SELECT SUM(amount) FROM account_transactions WHERE userId =
+      me AND type = EXPENSE AND transactionDate IN period AND (categoryId matches if set).
+   • currentSpend = Source1 + Source2. percentUsed = (currentSpend / budget.amount) × 100. remaining =
+      budget.amount - currentSpend.
+Tables Used: budgets → expense_splits → expenses → account_transactions → categories
+
+
+
+12.3 GET /budgets/:id/progress
+[GET] /budgets/:id/progress                        Get detailed progress for a single budget
+
+              All endpoints require: Authorization: Bearer {accessToken} · Base URL: https://api.splitwisemint.com/v1 · Page 36
+                                                                                                    SplitWiseMint API Documentation v2.1.0
+
+Response includes: budget metadata + current progress + daily spend breakdown for current period (for chart
+rendering) + top expenses contributing to this budget.
+Tables Used: budgets → expense_splits → expenses → account_transactions → categories
+
+
+
+12.4 PUT /budgets/:id
+[PUT] /budgets/:id                Update a budget
+ Field                        Type                Required       Validation Rules
+ name                         string              Optional       Updated name.
+ amount                       number              Optional       Updated limit amount.
+ alertAt50                    boolean             Optional       Updated alert setting.
+ alertAt80                    boolean             Optional       Updated alert setting.
+ alertAt100                   boolean             Optional       Updated alert setting.
+ isActive                     boolean             Optional       Set false to deactivate (stops tracking).
+Tables Used: budgets
+
+
+
+12.5 DELETE /budgets/:id
+[DELETE] /budgets/:id                   Delete a budget
+Verify budget belongs to current user. DELETE from budgets. Historical expense data is NOT affected.
+Tables Used: budgets
+
+
+
+12.6 Budget Check (async trigger — internal)
+    This is called internally after any expense is added (both POST /transactions/expense and POST /expenses). It
+    checks all active budgets for each participant and fires notifications if thresholds are crossed.
+
+Logic
+    180.             For each userId involved in the newly created expense/transaction:
+       ◦       Fetch all active budgets for that userId.
+       ◦       For each budget: calculate current period spend (see 12.2 logic — combining split expenses AND personal
+               transactions).
+         ◦     If percentUsed crosses 50/80/100 AND notification not yet sent this period: INSERT notifications of
+               appropriate BUDGET_ALERT type.
+Tables Used: budgets → expense_splits → expenses → account_transactions → notifications
+
+
+
+
+              All endpoints require: Authorization: Bearer {accessToken} · Base URL: https://api.splitwisemint.com/v1 · Page 37
+                                                                                                 SplitWiseMint API Documentation v2.1.0
+
+
+13. Invite APIs
+Invites allow users to invite friends who don't yet use the app. When the invited person registers, their invite is
+marked ACCEPTED and they get auto-linked to the inviter as a friend request.
+
+
+
+13.1 POST /invites
+[POST] /invites           Send an app invite to a non-user
+ Field                     Type                Required        Validation Rules
+ email                     string              Optional        Invite by email. Either email or phone required.
+ phone                     string              Optional        Invite by phone. Either email or phone required.
+
+Business Logic
+   181.         Verify target is not already a registered user. If they are, suggest sending friend request.
+   182.         INSERT into invites: { email/phone, invitedById=me, status=PENDING, expiresAt=now+7days }.
+   183.         Send invite SMS/email with app download link and invite code.
+   184.         When invitee registers: look up pending invite by email/phone. Auto-send friend request. Mark
+       invite ACCEPTED.
+Tables Used: invites → users
+
+
+
+13.2 GET /invites
+[GET] /invites          Get all invites sent by current user
+SELECT from invites WHERE invitedById = me ORDER BY createdAt DESC. Include status and registeredUser
+info if accepted.
+Tables Used: invites → users
+
+
+
+13.3 POST /invites/:id/resend
+[POST] /invites/:id/resend                    Resend an invite
+
+Business Logic
+   185.         Verify invite belongs to me AND status = PENDING.
+   186.         UPDATE invites SET expiresAt = now+7days.
+   187.         Resend SMS/email.
+Tables Used: invites
+
+
+
+
+           All endpoints require: Authorization: Bearer {accessToken} · Base URL: https://api.splitwisemint.com/v1 · Page 38
+                                                                                                 SplitWiseMint API Documentation v2.1.0
+
+
+14. Notification APIs
+14.1 GET /notifications
+[GET] /notifications                Get all notifications for current user
+
+Query Parameters
+ Param                    Type                  Description
+ page                     integer               Pagination (default 1)
+ limit                    integer               Per page (default 20, max 50)
+ isRead                   boolean               Filter unread only (false) or read only (true)
+ type                     string                Filter by NotificationType enum value
+Business Logic: SELECT from notifications WHERE userId = me. JOIN sender user. ORDER BY createdAt
+DESC.
+Tables Used: notifications → users
+
+
+
+14.2 GET /notifications/unread-count
+[GET] /notifications/unread-count                          Get count of unread notifications
+Used on screen: Notification bell badge (shown on all screens)
+     SELECT COUNT(*) FROM notifications WHERE userId = me AND isRead = false.
+     Response: { "data": { "unreadCount": 5 } }
+
+
+
+14.3 POST /notifications/:id/read
+[POST] /notifications/:id/read                        Mark a single notification as read
+UPDATE notifications SET isRead=true WHERE id = ? AND userId = me.
+Tables Used: notifications
+
+
+
+14.4 POST /notifications/read-all
+[POST] /notifications/read-all                        Mark all notifications as read
+UPDATE notifications SET isRead=true WHERE userId = me AND isRead=false.
+Tables Used: notifications
+
+
+
+14.5 DELETE /notifications/:id
+[DELETE] /notifications/:id                     Delete a single notification
+DELETE from notifications WHERE id = ? AND userId = me.
+Tables Used: notifications
+
+
+
+14.6 GET /notifications/settings
+[GET] /notifications/settings                       Get notification preferences for current user
+
+
+          All endpoints require: Authorization: Bearer {accessToken} · Base URL: https://api.splitwisemint.com/v1 · Page 39
+                                                                                                SplitWiseMint API Documentation v2.1.0
+
+   Notification settings are recommended to be stored in a separate user_settings table as a JSON column for
+   extensibility, not on the users record directly.
+
+
+
+14.7 PUT /notifications/settings
+[PUT] /notifications/settings                     Update notification preferences
+Field                                Type            Required       Validation Rules
+pushNotifications                    boolean         Optional       Master switch for all push notifications.
+emailNotifications                   boolean         Optional       Email notifications for important events.
+friendRequestNotifications           boolean         Optional       Friend request related notifications.
+expenseNotifications                 boolean         Optional       Expense added/updated notifications.
+settlementNotifications              boolean         Optional       Settlement related notifications.
+groupNotifications                   boolean         Optional       Group activity notifications.
+budgetAlertNotifications             boolean         Optional       Budget threshold alerts.
+lowBalanceAlertNotifications         boolean         Optional       Low account balance alerts.
+lowBalanceThreshold                  number          Optional       Account balance below this amount triggers alert.
+                                                                    Default 500.
+
+
+
+
+          All endpoints require: Authorization: Bearer {accessToken} · Base URL: https://api.splitwisemint.com/v1 · Page 40
+                                                                                                   SplitWiseMint API Documentation v2.1.0
+
+
+15. Analytics & Dashboard APIs
+15.1 GET /dashboard
+[GET] /dashboard                Get complete dashboard summary (single aggregated call)
+Used on screen: Main Dashboard / Home Screen. Replaces multiple separate calls for the home screen to
+minimise API calls on app launch.
+
+Business Logic — Parallel Queries
+     188.        totalAccountBalance: SUM(accounts.balance) WHERE userId=me AND isActive=true.
+     189.        friendBalances: total owed to me and total I owe (see Section 7.1 aggregate).
+     190.        recentExpenses: last 5 entries from expense_splits WHERE userId=me.
+     191.        activeGroups: groups WHERE I am an active member, include my net balance per group.
+     192.        pendingSettlements: COUNT settlements WHERE toUserId=me AND status=PENDING.
+     193.        unreadNotifications: COUNT notifications WHERE userId=me AND isRead=false.
+     194.        currentMonthStats: SUM income from account_transactions this month. SUM expenses from
+          account_transactions (type=EXPENSE) this month.
+     195.        budgetAlerts: active budgets with percentUsed ≥ 80%.
+Tables Used: accounts → expense_splits → expenses → groups → group_members → settlements →
+notifications → account_transactions → budgets
+
+
+
+15.2 GET /analytics/income-vs-expense
+[GET] /analytics/income-vs-expense                            Get income vs expense comparison for a period
+
+Query Parameters
+ Param                 Type             Default         Description
+ period                string           MONTH           WEEK | MONTH | YEAR | CUSTOM
+ startDate             date             —               Required if period=CUSTOM
+ endDate               date             —               Required if period=CUSTOM
+
+Business Logic
+   •  income: SUM(amount) FROM account_transactions WHERE userId=me AND type=INCOME AND
+      transactionDate BETWEEN start AND end.
+   • expense: SUM(amount) FROM account_transactions WHERE userId=me AND type IN (EXPENSE,
+      SETTLEMENT_OUT) AND transactionDate BETWEEN start AND end. This includes both personal
+      expense transactions (from POST /transactions/expense) and expense transactions linked to split
+      expenses (from POST /expenses with accountId).
+   • savings = income - expense. savingsRate = (savings/income)*100.
+Tables Used: account_transactions
+
+
+
+15.3 GET /analytics/spending-by-category
+[GET] /analytics/spending-by-category                               Get expense breakdown by category
+
+Query Parameters
+period: WEEK | MONTH | YEAR | CUSTOM. startDate, endDate (if CUSTOM).
+
+Business Logic
+             All endpoints require: Authorization: Bearer {accessToken} · Base URL: https://api.splitwisemint.com/v1 · Page 41
+                                                                                                SplitWiseMint API Documentation v2.1.0
+
+Combine two sources for complete picture:
+   • Split expenses: JOIN expense_splits → expenses → categories. WHERE es.userId=me AND
+      e.expenseDate in period. GROUP BY categoryId.
+   • Personal transactions: SELECT FROM account_transactions WHERE userId=me AND type=EXPENSE
+      AND transactionDate in period. GROUP BY categoryId.
+   • Merge results by categoryId. SUM amounts. Calculate percentage of grand total.
+Tables Used: expense_splits → expenses → account_transactions → categories
+
+
+
+15.4 GET /analytics/monthly-trends
+[GET] /analytics/monthly-trends                       Get month-by-month income, expense, and savings trend
+
+Query Parameters
+ Param                    Type                Default          Description
+ months                   integer             6                Number of months to return (max 24)
+Business Logic: For each of the last N months: SUM income from account_transactions, SUM expense from
+account_transactions. Return per-month breakdown.
+Tables Used: account_transactions
+
+
+
+15.5 GET /analytics/friend-balances
+[GET] /analytics/friend-balances                        Get friend balance analytics summary
+Aggregate all unsettled splits by friend pair (see Section 7.1). Return top debtors and top creditors.
+Tables Used: expense_splits → expenses → friendships → users
+
+
+
+15.6 GET /analytics/group/:id
+[GET] /analytics/group/:id                   Get expense analytics for a specific group
+Returns: total group expenses by date range, per-member contribution breakdown (who paid most), category
+breakdown for group expenses, timeline of group expenses (for activity chart).
+Tables Used: expenses → expense_splits → categories → users → contacts → group_members
+
+
+
+
+          All endpoints require: Authorization: Bearer {accessToken} · Base URL: https://api.splitwisemint.com/v1 · Page 42
+                                                                                                 SplitWiseMint API Documentation v2.1.0
+
+
+Appendix A — Standard API Conventions
+A.1 Standard Response Envelope
+   // Success response:
+   { "success": true, "data": { ... }, "message": "Optional success message" }
+
+
+   // Error response:
+   { "success": false, "error": { "code": "MACHINE_READABLE_CODE",
+     "message": "Human readable message",
+     "details": [ { "field": "email", "message": "Invalid email format" } ] } }
+
+
+
+A.2 Standard HTTP Status Codes
+Status                    Meaning                       When to use
+200 OK                    Request succeeded             GET, PUT, PATCH responses
+201 Created               Resource created              POST responses that create records
+204 No Content            Success, no body              DELETE responses
+400 Bad Request           Invalid input or business     Missing fields, invalid data, logical violations
+                          rule violation
+401 Unauthorized          Missing or invalid JWT        No token or expired token
+403 Forbidden             Authenticated but not         Accessing another user's resource, wrong role
+                          authorized
+404 Not Found             Resource doesn't exist        Invalid ID in URL
+409 Conflict              Duplicate resource            Duplicate email, already friends, etc.
+422 Unprocessable         Validation failed             Split sums wrong, percentages don't add to 100
+429 Too Many              Rate limit hit                Reminders too frequent, too many OTPs
+Requests
+500 Internal Server       Unexpected server error       DB failure, unhandled exception
+Error
+
+
+
+
+A.3 Pagination Standard
+   { "pagination": { "page": 1, "limit": 20, "total": 156,
+     "totalPages": 8, "hasNext": true, "hasPrev": false } }
+
+
+
+A.4 Authentication Header
+   // All protected routes require:
+   Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+
+
+   // JWT payload structure:
+   { "sub": "user-uuid", "email": "john@gmail.com",
+     "iat": 1742400000, "exp": 1742400900 }
+
+
+
+A.5 Complete API Endpoint Reference
+          All endpoints require: Authorization: Bearer {accessToken} · Base URL: https://api.splitwisemint.com/v1 · Page 43
+                                                                                               SplitWiseMint API Documentation v2.1.0
+
+Method     Endpoint                                       Description                                     Auth
+POST       /auth/register                                 Register new user                               Public
+GET        /auth/verify-email                             Verify email token                              Public
+POST       /auth/resend-verification                      Resend verify email                             Public
+POST       /auth/login                                    Login                                           Public
+POST       /auth/refresh                                  Refresh tokens                                  Public
+POST       /auth/logout                                   Logout                                          Private
+POST       /auth/forgot-password                          Request reset                                   Public
+POST       /auth/reset-password                           Reset password                                  Public
+GET        /users/me                                      Get profile                                     Private
+PUT        /users/me                                      Update profile                                  Private
+POST       /users/avatar                                  Upload avatar                                   Private
+POST       /users/change-password                         Change password                                 Private
+DELETE     /users/me                                      Deactivate account                              Private
+POST       /accounts                                      Create account                                  Private
+GET        /accounts                                      List accounts                                   Private
+GET        /accounts/balance/total                        Total balance                                   Private
+GET        /accounts/:id                                  Account detail                                  Private
+PUT        /accounts/:id                                  Update account                                  Private
+POST       /accounts/:id/adjust                           Adjust balance                                  Private
+DELETE     /accounts/:id                                  Delete account                                  Private
+POST       /transactions/income                           Add income                                      Private
+POST       /transactions/expense                          Add personal expense ✦ NEW                      Private
+
+POST       /transactions/transfer                         Transfer between accounts                       Private
+GET        /transactions                                  List transactions                               Private
+PUT        /transactions/:id                              Edit transaction ✦ NEW                          Private
+
+DELETE     /transactions/:id                              Delete transaction                              Private
+GET        /categories                                    List categories                                 Private
+POST       /categories                                    Create category                                 Private
+PUT        /categories/:id                                Update category                                 Private
+DELETE     /categories/:id                                Delete category                                 Private
+POST       /expenses                                      Create split expense                            Private
+GET        /expenses                                      List expenses                                   Private
+GET        /expenses/:id                                  Expense detail                                  Private
+PUT        /expenses/:id                                  Update expense                                  Private
+DELETE     /expenses/:id                                  Delete expense                                  Private
+POST       /expenses/:id/receipt                          Upload receipt                                  Private
+POST       /expenses/:id/comments                         Add comment                                     Private
+GET        /expenses/:id/comments                         List comments                                   Private
+GET        /expenses/summary                              Expense summary                                 Private
+GET        /splits/balances                               All friend balances                             Private
+
+
+         All endpoints require: Authorization: Bearer {accessToken} · Base URL: https://api.splitwisemint.com/v1 · Page 44
+                                                                                               SplitWiseMint API Documentation v2.1.0
+
+GET        /splits/balances/simplified                    Simplified payments                             Private
+GET        /splits/expense/:id                            Splits for expense                              Private
+POST       /friends/request                               Send friend request                             Private
+GET        /friends/pending                               Pending requests                                Private
+POST       /friends/requests/:id/accept                   Accept request                                  Private
+POST       /friends/requests/:id/reject                   Reject request                                  Private
+GET        /friends                                       Friends list                                    Private
+GET        /friends/:id                                   Friend profile                                  Private
+POST       /friends/:id/block                             Block user                                      Private
+DELETE     /friends/:id                                   Remove friend                                   Private
+GET        /friends/balances                              Friend balances                                 Private
+POST       /contacts                                      Add contact                                     Private
+GET        /contacts                                      List contacts                                   Private
+PUT        /contacts/:id                                  Update contact                                  Private
+DELETE     /contacts/:id                                  Delete contact                                  Private
+POST       /contacts/:id/link                             Link contact to user                            Private
+POST       /groups                                        Create group                                    Private
+GET        /groups                                        List my groups                                  Private
+GET        /groups/:id                                    Group detail                                    Private
+PUT        /groups/:id                                    Update group                                    Private
+POST       /groups/:id/members                            Add member                                      Private
+DELETE     /groups/:id/members/:memberId                  Remove member                                   Private
+GET        /groups/:id/members                            List members                                    Private
+GET        /groups/:id/expenses                           Group expenses                                  Private
+GET        /groups/:id/balances                           Group balances                                  Private
+POST       /groups/:id/image                              Upload group photo                              Private
+POST       /groups/:id/settle                             Settle all group splits                         Private
+PUT        /groups/:id/members/:id/admin                  Toggle admin                                    Private
+POST       /settlements                                   Record payment                                  Private
+POST       /settlements/:id/confirm                       Confirm payment                                 Private
+POST       /settlements/:id/reject                        Reject payment                                  Private
+POST       /settlements/:id/cancel                        Cancel payment                                  Private
+POST       /settlements/:id/remind                        Send reminder                                   Private
+GET        /settlements                                   Settlement history                              Private
+GET        /settlements/:id                               Settlement detail                               Private
+POST       /budgets                                       Create budget                                   Private
+GET        /budgets                                       List budgets with progress                      Private
+GET        /budgets/:id/progress                          Budget detail                                   Private
+PUT        /budgets/:id                                   Update budget                                   Private
+DELETE     /budgets/:id                                   Delete budget                                   Private
+POST       /invites                                       Send invite                                     Private
+
+
+         All endpoints require: Authorization: Bearer {accessToken} · Base URL: https://api.splitwisemint.com/v1 · Page 45
+                                                                                               SplitWiseMint API Documentation v2.1.0
+
+GET        /invites                                       List sent invites                               Private
+POST       /invites/:id/resend                            Resend invite                                   Private
+GET        /notifications                                 List notifications                              Private
+GET        /notifications/unread-count                    Unread count                                    Private
+POST       /notifications/:id/read                        Mark as read                                    Private
+POST       /notifications/read-all                        Mark all read                                   Private
+DELETE     /notifications/:id                             Delete notification                             Private
+GET        /notifications/settings                        Get preferences                                 Private
+PUT        /notifications/settings                        Update preferences                              Private
+GET        /dashboard                                     Full dashboard data                             Private
+GET        /analytics/income-vs-expense                   Income vs expense                               Private
+GET        /analytics/spending-by-category                Category breakdown                              Private
+GET        /analytics/monthly-trends                      Monthly trends                                  Private
+GET        /analytics/friend-balances                     Friend balance analytics                        Private
+GET        /analytics/group/:id                           Group analytics                                 Private
+
+
+
+
+         All endpoints require: Authorization: Bearer {accessToken} · Base URL: https://api.splitwisemint.com/v1 · Page 46
+

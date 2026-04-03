@@ -163,6 +163,7 @@ router.post('/requests/:requestId/accept', authenticate, friendsController.accep
  *         description: Friend request rejected
  */
 router.post('/requests/:requestId/reject', authenticate, friendsController.rejectRequest);
+router.post('/:friendId/block', authenticate, friendsController.blockFriendById);
 
 /**
  * @swagger

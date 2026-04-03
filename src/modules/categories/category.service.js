@@ -4,14 +4,14 @@ const logger = require('../../utils/logger');
 class CategoriesService {
   async getAllCategories(userId) {
     const categories = await prisma.category.findMany({
-      where: {
-        OR: [
-          { isDefault: true },
-          { userId }
-        ]
-      },
+      // where: {
+      //   OR: [
+      //     // { isDefault: true },
+      //     { userId }
+      //   ]
+      // },
       orderBy: [
-        { isDefault: 'desc' },
+        // { isDefault: 'desc' },
         { name: 'asc' }
       ]
     });

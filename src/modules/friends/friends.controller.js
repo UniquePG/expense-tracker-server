@@ -17,8 +17,8 @@ class FriendsController {
   // New: send request by email (per API spec)
   async sendRequestByEmail(req, res, next) {
     try {
-      const { email } = req.validatedBody;
-      const result = await friendsService.sendFriendRequestByEmail(req.user.id, email);
+      const { email, phone } = req.validatedBody;
+      const result = await friendsService.sendFriendRequestByEmail(req.user.id, email, phone);
       return ApiResponse.success(res, 'Friend request sent', result, 201);
     } catch (error) {
       next(error);
@@ -80,6 +80,15 @@ class FriendsController {
     try {
       await friendsService.removeFriend(req.user.id, req.params.friendId);
       return ApiResponse.success(res, 'Friend removed successfully');
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async blockFriendById(req, res, next) {
+    try {
+      await friendsService.blockFriend(req.user.id, req.params.friendId);
+      return ApiResponse.success(res, 'Friend blocked successfully');
     } catch (error) {
       next(error);
     }

@@ -1,7 +1,10 @@
 const userService = require('./user.service');
 const authService = require('../auth/auth.service');
+const cloudinaryService = require('../../utils/cloudinary');
 const ApiResponse = require('../../utils/response');
 const PaginationHelper = require('../../utils/pagination');
+const fs = require('fs');
+const logger = require('../../utils/logger');
 
 class UserController {
   async getProfile(req, res, next) {
@@ -33,12 +36,81 @@ class UserController {
 
   async uploadAvatar(req, res, next) {
     try {
-      const { avatar } = req.body;
-      if (!avatar) {
-        return ApiResponse.error(res, 'Avatar is required', 400);
+      // Check if file was uploaded
+      if (!req.file) {
+        return ApiResponse.error(res, 'No file provided', 400);
       }
-      const user = await userService.updateProfile(req.user.id, { avatar });
-      return ApiResponse.success(res, 'Avatar updated successfully', { avatar: user.avatar });
+
+      // Get current user to check for existing avatar
+      const currentUser = await userService.getUserById(req.user.id);
+
+      // Upload to Cloudinary
+      const uploadResult = await cloudinaryService.uploadFile(
+        req.file.path,
+        'splitwise/avatars',
+        `${req.user.id}-avatar`
+      );
+
+      // Clean up local file
+      if (fs.existsSync(req.file.path)) {
+        fs.unlinkSync(req.file.path);
+      }
+
+      // Delete old avatar from Cloudinary if it exists
+      if (currentUser.avatar) {
+        const oldPublicId = cloudinaryService.extractPublicId(currentUser.avatar);
+        if (oldPublicId) {
+          await cloudinaryService.deleteFile(oldPublicId).catch(err => {
+            logger.warn(`Failed to delete old avatar: ${err.message}`);
+          });
+        }
+      }
+
+      // Update user profile with new avatar URL
+      const user = await userService.updateProfile(req.user.id, {
+        avatar: uploadResult.url
+      });
+
+      return ApiResponse.success(res, 'Avatar updated successfully', {
+        avatar: user.avatar,
+        fileInfo: {
+          size: uploadResult.size,
+          format: uploadResult.format,
+          width: uploadResult.width,
+          height: uploadResult.height
+        }
+      });
+    } catch (error) {
+      // Clean up local file if upload failed
+      if (req.file && fs.existsSync(req.file.path)) {
+        fs.unlinkSync(req.file.path);
+      }
+      next(error);
+    }
+  }
+
+  async deleteAvatar(req, res, next) {
+    try {
+      const user = await userService.getUserById(req.user.id);
+
+      if (!user.avatar) {
+        return ApiResponse.error(res, 'No avatar to delete', 400);
+      }
+
+      // Extract public ID and delete from Cloudinary
+      const publicId = cloudinaryService.extractPublicId(user.avatar);
+      if (publicId) {
+        await cloudinaryService.deleteFile(publicId);
+      }
+
+      // Remove avatar from user profile
+      const updatedUser = await userService.updateProfile(req.user.id, {
+        avatar: null
+      });
+
+      return ApiResponse.success(res, 'Avatar deleted successfully', {
+        avatar: updatedUser.avatar
+      });
     } catch (error) {
       next(error);
     }

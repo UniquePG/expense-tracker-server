@@ -37,6 +37,16 @@ class InvitesController {
       next(error);
     }
   }
+
+  async resendInvite(req, res, next) {
+    try {
+      const { id } = req.params;
+      const invite = await invitesService.resendInvite(id, req.user.id);
+      return ApiResponse.success(res, 'Invite resent successfully', { invite });
+    } catch (error) {
+      next(error);
+    }
+  }
 }
 
 module.exports = new InvitesController();

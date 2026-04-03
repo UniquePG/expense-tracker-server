@@ -22,8 +22,12 @@ const settlementRoutes = require('./modules/settlements/settlement.routes.js');
 const categoryRoutes = require('./modules/categories/category.routes.js');
 const notificationRoutes = require('./modules/notifications/notification.routes.js');
 const inviteRoutes = require('./modules/invites/invite.routes.js');
+const budgetRoutes = require('./modules/budgets/budget.routes.js');
 const analyticsRoutes = require('./modules/analytics/analytics.routes.js');
 const transactionRoutes = require('./modules/transactions/transaction.routes.js');
+const accountRoutes = require('./modules/accounts/account.routes.js');
+const contactRoutes = require('./modules/contacts/contact.routes.js');
+const dashboardRoutes = require('./modules/dashboard/dashboard.routes.js');
 
 const app = express();
 
@@ -62,8 +66,8 @@ app.use('/api/', limiter);
 
 // Stricter rate limit for auth endpoints
 const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 5,
+  windowMs: 1 * 60 * 1000,
+  max: 10,
   skipSuccessfulRequests: true,
   message: {
     success: false,
@@ -111,8 +115,12 @@ app.use('/api/v1/settlements', settlementRoutes);
 app.use('/api/v1/categories', categoryRoutes);
 app.use('/api/v1/notifications', notificationRoutes);
 app.use('/api/v1/invites', inviteRoutes);
+app.use('/api/v1/budgets', budgetRoutes);
 app.use('/api/v1/analytics', analyticsRoutes);
 app.use('/api/v1/transactions', transactionRoutes);
+app.use('/api/v1/accounts', accountRoutes);
+app.use('/api/v1/contacts', contactRoutes);
+app.use('/api/v1/dashboard', dashboardRoutes);
 
 // 404 handler
 app.use(notFound);

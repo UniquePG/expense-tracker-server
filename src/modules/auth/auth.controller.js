@@ -13,8 +13,8 @@ class AuthController {
 
   async login(req, res, next) {
     try {
-      const { email, password } = req.validatedBody;
-      const result = await authService.login(email, password);
+      const { email, password, pushToken } = req.validatedBody;
+      const result = await authService.login(email, password, pushToken);
       return ApiResponse.success(res, 'Login successful', result);
     } catch (error) {
       next(error);
@@ -92,9 +92,29 @@ class AuthController {
 
   async verifyEmail(req, res, next) {
     try {
-      const { token } = req.body;
+      const { token } = req.validatedBody;
       await authService.verifyEmail(token);
       return ApiResponse.success(res, 'Email verified successfully');
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async verifyEmailFromQuery(req, res, next) {
+    try {
+      const { token } = req.validatedQuery;
+      await authService.verifyEmail(token);
+      return ApiResponse.success(res, 'Email verified successfully');
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async resendVerification(req, res, next) {
+    try {
+      const { email } = req.validatedBody;
+      await authService.resendVerificationEmail(email);
+      return ApiResponse.success(res, 'Verification email sent successfully');
     } catch (error) {
       next(error);
     }

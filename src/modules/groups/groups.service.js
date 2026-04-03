@@ -1,53 +1,84 @@
 const prisma = require('../../config/database');
 const logger = require('../../utils/logger');
 
+const userSelect = {
+  id: true,
+  firstName: true,
+  lastName: true,
+  email: true,
+  avatar: true
+};
+
 class GroupsService {
+  async ensureActiveMembership(groupId, userId) {
+    const membership = await prisma.groupMember.findFirst({
+      where: {
+        groupId,
+        userId,
+        status: 'ACTIVE'
+      }
+    });
+
+    if (!membership) {
+      throw { statusCode: 403, message: 'Not a member of this group' };
+    }
+
+    return membership;
+  }
+
+  async ensureAdmin(groupId, userId) {
+    const membership = await prisma.groupMember.findFirst({
+      where: {
+        groupId,
+        userId,
+        status: 'ACTIVE',
+        isAdmin: true
+      }
+    });
+
+    if (!membership) {
+      throw { statusCode: 403, message: 'Only group admins can perform this action' };
+    }
+
+    return membership;
+  }
+
   async createGroup(userId, groupData) {
     const { name, description, image, memberIds = [] } = groupData;
 
-    // Create group with creator as admin member
+    const uniqueMemberIds = [...new Set(memberIds.filter((id) => id !== userId))];
+
     const group = await prisma.group.create({
       data: {
         name,
         description,
         image,
         createdBy: userId,
+        status: 'ACTIVE',
         members: {
           create: [
             {
               userId,
-              isAdmin: true
+              isAdmin: true,
+              status: 'ACTIVE'
             },
-            ...memberIds.filter(id => id !== userId).map(id => ({
-              userId: id,
-              isAdmin: false
+            ...uniqueMemberIds.map((memberId) => ({
+              userId: memberId,
+              isAdmin: false,
+              status: 'ACTIVE'
             }))
           ]
         }
       },
       include: {
         members: {
+          where: { status: 'ACTIVE' },
           include: {
-            user: {
-              select: {
-                id: true,
-                firstName: true,
-                lastName: true,
-                email: true,
-                avatar: true
-              }
-            }
+            user: { select: userSelect },
+            contact: true
           }
         },
-        creator: {
-          select: {
-            id: true,
-            firstName: true,
-            lastName: true,
-            email: true,
-            avatar: true
-          }
-        }
+        creator: { select: userSelect }
       }
     });
 
@@ -56,66 +87,39 @@ class GroupsService {
   }
 
   async getGroupById(groupId, userId) {
+    await this.ensureActiveMembership(groupId, userId);
+
     const group = await prisma.group.findFirst({
       where: {
         id: groupId,
-        members: {
-          some: {
-            userId
-          }
-        }
+        status: { not: 'DELETED' }
       },
       include: {
         members: {
+          where: { status: 'ACTIVE' },
           include: {
-            user: {
-              select: {
-                id: true,
-                firstName: true,
-                lastName: true,
-                email: true,
-                avatar: true
-              }
-            }
+            user: { select: userSelect },
+            contact: true
           }
         },
-        creator: {
-          select: {
-            id: true,
-            firstName: true,
-            lastName: true,
-            email: true,
-            avatar: true
-          }
-        },
+        creator: { select: userSelect },
         expenses: {
-          take: 5,
-          orderBy: { createdAt: 'desc' },
+          where: { isDeleted: false },
+          take: 10,
+          orderBy: { expenseDate: 'desc' },
           include: {
-            paidBy: {
-              select: {
-                id: true,
-                firstName: true,
-                lastName: true,
-                avatar: true
-              }
-            },
+            paidBy: { select: userSelect },
+            category: true,
             splits: {
               include: {
-                user: {
-                  select: {
-                    id: true,
-                    firstName: true,
-                    lastName: true
-                  }
-                  }
-                }
+                user: { select: userSelect },
+                contact: true
               }
             }
           }
         }
       }
-    );
+    });
 
     if (!group) {
       throw { statusCode: 404, message: 'Group not found' };
@@ -127,26 +131,25 @@ class GroupsService {
   async getUserGroups(userId, pagination) {
     const { skip, take } = pagination;
 
+    const where = {
+      status: { not: 'DELETED' },
+      members: {
+        some: {
+          userId,
+          status: 'ACTIVE'
+        }
+      }
+    };
+
     const [groups, total] = await Promise.all([
       prisma.group.findMany({
-        where: {
-          members: {
-            some: {
-              userId
-            }
-          }
-        },
+        where,
         include: {
           members: {
+            where: { status: 'ACTIVE' },
             include: {
-              user: {
-                select: {
-                  id: true,
-                  firstName: true,
-                  lastName: true,
-                  avatar: true
-                }
-              }
+              user: { select: userSelect },
+              contact: true
             }
           },
           _count: {
@@ -160,49 +163,24 @@ class GroupsService {
         take,
         orderBy: { updatedAt: 'desc' }
       }),
-      prisma.group.count({
-        where: {
-          members: {
-            some: {
-              userId
-            }
-          }
-        }
-      })
+      prisma.group.count({ where })
     ]);
 
     return { groups, total };
   }
 
   async updateGroup(groupId, userId, updateData) {
-    // Check if user is admin
-    const membership = await prisma.groupMember.findFirst({
-      where: {
-        groupId,
-        userId,
-        isAdmin: true
-      }
-    });
-
-    if (!membership) {
-      throw { statusCode: 403, message: 'Only admin can update group' };
-    }
+    await this.ensureAdmin(groupId, userId);
 
     const group = await prisma.group.update({
       where: { id: groupId },
       data: updateData,
       include: {
         members: {
+          where: { status: 'ACTIVE' },
           include: {
-            user: {
-              select: {
-                id: true,
-                firstName: true,
-                lastName: true,
-                email: true,
-                avatar: true
-              }
-            }
+            user: { select: userSelect },
+            contact: true
           }
         }
       }
@@ -213,11 +191,11 @@ class GroupsService {
   }
 
   async deleteGroup(groupId, userId) {
-    // Check if user is creator
     const group = await prisma.group.findFirst({
       where: {
         id: groupId,
-        createdBy: userId
+        createdBy: userId,
+        status: { not: 'DELETED' }
       }
     });
 
@@ -225,257 +203,312 @@ class GroupsService {
       throw { statusCode: 403, message: 'Only creator can delete group' };
     }
 
-    await prisma.group.delete({
-      where: { id: groupId }
+    await prisma.group.update({
+      where: { id: groupId },
+      data: { status: 'DELETED' }
     });
 
-    logger.info(`Group deleted: ${groupId}`);
+    logger.info(`Group soft-deleted: ${groupId}`);
   }
 
-  async addMember(groupId, adminId, userId) {
-    // Check if admin
-    const adminMembership = await prisma.groupMember.findFirst({
-      where: {
-        groupId,
-        userId: adminId,
-        isAdmin: true
+  async addMember(groupId, actorUserId, memberData) {
+    await this.ensureActiveMembership(groupId, actorUserId);
+
+    const { userId, contactId } = memberData;
+    if (!userId && !contactId) {
+      throw { statusCode: 400, message: 'Either userId or contactId is required' };
+    }
+
+    if (userId && contactId) {
+      throw { statusCode: 400, message: 'Provide either userId or contactId, not both' };
+    }
+
+    if (userId) {
+      if (userId === actorUserId) {
+        throw { statusCode: 400, message: 'User is already in the group' };
       }
-    });
 
-    if (!adminMembership) {
-      throw { statusCode: 403, message: 'Only admin can add members' };
+      const user = await prisma.user.findUnique({ where: { id: userId } });
+      if (!user) {
+        throw { statusCode: 404, message: 'User not found' };
+      }
+
+      const friendship = await prisma.friendship.findFirst({
+        where: {
+          OR: [
+            { requesterId: actorUserId, addresseeId: userId },
+            { requesterId: userId, addresseeId: actorUserId }
+          ],
+          status: 'ACCEPTED'
+        }
+      });
+
+      if (!friendship) {
+        throw { statusCode: 403, message: 'Only accepted friends can be added to group' };
+      }
     }
 
-    // Check if user exists
-    const user = await prisma.user.findUnique({
-      where: { id: userId }
-    });
+    if (contactId) {
+      const contact = await prisma.contact.findFirst({
+        where: {
+          id: contactId,
+          ownerId: actorUserId
+        }
+      });
 
-    if (!user) {
-      throw { statusCode: 404, message: 'User not found' };
+      if (!contact) {
+        throw { statusCode: 404, message: 'Contact not found' };
+      }
     }
 
-    // Check if already member
     const existingMember = await prisma.groupMember.findFirst({
       where: {
         groupId,
-        userId
+        ...(userId ? { userId } : {}),
+        ...(contactId ? { contactId } : {}),
+        status: 'ACTIVE'
       }
     });
 
     if (existingMember) {
-      throw { statusCode: 409, message: 'User is already a member' };
+      throw { statusCode: 409, message: 'Member is already active in this group' };
     }
 
     const member = await prisma.groupMember.create({
       data: {
         groupId,
-        userId
+        userId: userId || null,
+        contactId: contactId || null,
+        status: 'ACTIVE'
       },
       include: {
-        user: {
-          select: {
-            id: true,
-            firstName: true,
-            lastName: true,
-            email: true,
-            avatar: true
-          }
-        }
+        user: { select: userSelect },
+        contact: true
       }
     });
 
-    logger.info(`Member added to group ${groupId}: ${userId}`);
+    logger.info(`Member added to group ${groupId}: ${userId || contactId}`);
     return member;
   }
 
-  async removeMember(groupId, adminId, userId) {
-    // Check if admin
-    const adminMembership = await prisma.groupMember.findFirst({
+  async removeMember(groupId, actorUserId, memberUserId) {
+    const actorMembership = await this.ensureActiveMembership(groupId, actorUserId);
+
+    const targetMembership = await prisma.groupMember.findFirst({
       where: {
         groupId,
-        userId: adminId,
-        isAdmin: true
+        userId: memberUserId,
+        status: 'ACTIVE'
       }
     });
 
-    // Allow self-removal
-    if (adminId !== userId && !adminMembership) {
-      throw { statusCode: 403, message: 'Only admin can remove members' };
+    if (!targetMembership) {
+      throw { statusCode: 404, message: 'Member not found in group' };
     }
 
-    // Prevent removing creator
-    const group = await prisma.group.findUnique({
-      where: { id: groupId }
-    });
-
-    if (group.createdBy === userId) {
-      throw { statusCode: 400, message: 'Cannot remove group creator' };
+    if (actorUserId !== memberUserId && !actorMembership.isAdmin) {
+      throw { statusCode: 403, message: 'Only admins can remove other members' };
     }
 
-    await prisma.groupMember.deleteMany({
-      where: {
-        groupId,
-        userId
+    if (targetMembership.isAdmin && actorUserId !== memberUserId) {
+      const activeAdmins = await prisma.groupMember.count({
+        where: {
+          groupId,
+          status: 'ACTIVE',
+          isAdmin: true
+        }
+      });
+
+      if (activeAdmins <= 1) {
+        throw { statusCode: 400, message: 'Cannot remove the only admin in the group' };
+      }
+    }
+
+    await prisma.groupMember.update({
+      where: { id: targetMembership.id },
+      data: {
+        status: actorUserId === memberUserId ? 'LEFT' : 'REMOVED',
+        leftAt: new Date()
       }
     });
 
-    logger.info(`Member removed from group ${groupId}: ${userId}`);
+    logger.info(`Member removed from group ${groupId}: ${memberUserId}`);
   }
 
-  async getGroupBalances(groupId, userId) {
-    // Check membership
-    const membership = await prisma.groupMember.findFirst({
+  async toggleMemberAdmin(groupId, adminUserId, memberId, isAdmin) {
+    await this.ensureAdmin(groupId, adminUserId);
+
+    const targetMembership = await prisma.groupMember.findFirst({
       where: {
+        id: memberId,
         groupId,
-        userId
+        status: 'ACTIVE'
       }
     });
 
-    if (!membership) {
-      throw { statusCode: 403, message: 'Not a member of this group' };
+    if (!targetMembership) {
+      throw { statusCode: 404, message: 'Member not found' };
     }
 
-    // Get all expenses in group
-    const expenses = await prisma.expense.findMany({
-      where: { groupId },
-      include: {
-        paidBy: {
-          select: {
-            id: true,
-            firstName: true,
-            lastName: true
-          }
-        },
-        splits: {
-          include: {
-            user: {
-              select: {
-                id: true,
-                firstName: true,
-                lastName: true
-              }
-            }
-          }
+    if (!isAdmin && targetMembership.userId === adminUserId) {
+      const activeAdmins = await prisma.groupMember.count({
+        where: {
+          groupId,
+          status: 'ACTIVE',
+          isAdmin: true
         }
-      }
-    });
-
-    // Calculate balances
-    const balances = {};
-
-    expenses.forEach(expense => {
-      const payerId = expense.paidById;
-      const amount = parseFloat(expense.amount);
-
-      // Payer lent money
-      if (!balances[payerId]) {
-        balances[payerId] = { user: expense.paidBy, lent: 0, borrowed: 0 };
-      }
-      balances[payerId].lent += amount;
-
-      // Splitters borrowed money
-      expense.splits.forEach(split => {
-        const splitUserId = split.userId;
-        const splitAmount = parseFloat(split.amount);
-
-        if (!balances[splitUserId]) {
-          balances[splitUserId] = { user: split.user, lent: 0, borrowed: 0 };
-        }
-        balances[splitUserId].borrowed += splitAmount;
       });
+
+      if (activeAdmins <= 1) {
+        throw { statusCode: 400, message: 'Cannot remove own admin role as the only admin' };
+      }
+    }
+
+    const updated = await prisma.groupMember.update({
+      where: { id: targetMembership.id },
+      data: { isAdmin },
+      include: {
+        user: { select: userSelect },
+        contact: true
+      }
     });
 
-    // Calculate net balance
-    const result = Object.values(balances).map(b => ({
-      user: b.user,
-      lent: b.lent,
-      borrowed: b.borrowed,
-      netBalance: b.lent - b.borrowed
-    }));
-
-    return result;
+    logger.info(`Member admin toggled in group ${groupId}: ${memberId} => ${isAdmin}`);
+    return updated;
   }
 
   async getGroupMembers(groupId, userId) {
-    const membership = await prisma.groupMember.findFirst({
-      where: { groupId, userId }
-    });
+    await this.ensureActiveMembership(groupId, userId);
 
-    if (!membership) {
-      throw { statusCode: 403, message: 'Not a member of this group' };
-    }
-
-    const members = await prisma.groupMember.findMany({
-      where: { groupId },
+    return prisma.groupMember.findMany({
+      where: {
+        groupId,
+        status: 'ACTIVE'
+      },
       include: {
-        user: {
-          select: {
-            id: true,
-            firstName: true,
-            lastName: true,
-            email: true,
-            avatar: true
-          }
-        }
-      }
+        user: { select: userSelect },
+        contact: true
+      },
+      orderBy: { joinedAt: 'asc' }
     });
-
-    return members;
   }
 
   async getGroupExpenses(groupId, userId, pagination) {
-    const membership = await prisma.groupMember.findFirst({
-      where: { groupId, userId }
-    });
-
-    if (!membership) {
-      throw { statusCode: 403, message: 'Not a member of this group' };
-    }
+    await this.ensureActiveMembership(groupId, userId);
 
     const { skip, take } = pagination;
 
+    const where = {
+      groupId,
+      isDeleted: false
+    };
+
     const [expenses, total] = await Promise.all([
       prisma.expense.findMany({
-        where: { groupId },
+        where,
         include: {
-          paidBy: {
-            select: { id: true, firstName: true, lastName: true, avatar: true }
-          },
+          paidBy: { select: userSelect },
+          category: true,
           splits: {
-            include: { user: { select: { id: true, firstName: true, lastName: true, avatar: true } } }
+            include: {
+              user: { select: userSelect },
+              contact: true
+            }
           }
         },
         skip,
         take,
-        orderBy: { date: 'desc' }
+        orderBy: { expenseDate: 'desc' }
       }),
-      prisma.expense.count({ where: { groupId } })
+      prisma.expense.count({ where })
     ]);
 
     return { expenses, total };
   }
 
-  async settleGroup(groupId, userId) {
-    const membership = await prisma.groupMember.findFirst({
-      where: { groupId, userId, isAdmin: true }
+  async getGroupBalances(groupId, userId) {
+    await this.ensureActiveMembership(groupId, userId);
+
+    const members = await prisma.groupMember.findMany({
+      where: {
+        groupId,
+        status: 'ACTIVE'
+      },
+      include: {
+        user: { select: userSelect },
+        contact: true
+      }
     });
 
-    if (!membership) {
-      throw { statusCode: 403, message: 'Only admin can settle group debts entirely' };
-    }
+    const memberMap = new Map();
+    members.forEach((member) => {
+      const key = member.userId || member.contactId;
+      memberMap.set(key, {
+        memberId: member.id,
+        user: member.user,
+        contact: member.contact,
+        isAdmin: member.isAdmin,
+        totalPaid: 0,
+        totalOwes: 0
+      });
+    });
 
     const expenses = await prisma.expense.findMany({
-      where: { groupId },
+      where: {
+        groupId,
+        isDeleted: false
+      },
+      include: {
+        splits: true
+      }
+    });
+
+    expenses.forEach((expense) => {
+      const payerKey = expense.paidById;
+      if (memberMap.has(payerKey)) {
+        memberMap.get(payerKey).totalPaid += parseFloat(expense.amount);
+      }
+
+      expense.splits.forEach((split) => {
+        const splitKey = split.userId || split.contactId;
+        if (splitKey && memberMap.has(splitKey) && !split.isSettled) {
+          memberMap.get(splitKey).totalOwes += parseFloat(split.amount);
+        }
+      });
+    });
+
+    return Array.from(memberMap.values()).map((member) => ({
+      ...member,
+      balance: parseFloat((member.totalPaid - member.totalOwes).toFixed(2))
+    }));
+  }
+
+  async settleGroup(groupId, userId) {
+    await this.ensureAdmin(groupId, userId);
+
+    const expenses = await prisma.expense.findMany({
+      where: {
+        groupId,
+        isDeleted: false
+      },
       select: { id: true }
     });
 
-    const expenseIds = expenses.map(e => e.id);
+    const expenseIds = expenses.map((expense) => expense.id);
 
-    // Update all expense splits to settled
+    if (expenseIds.length === 0) {
+      return { success: true, message: 'No unsettled group splits found' };
+    }
+
     await prisma.expenseSplit.updateMany({
-      where: { expenseId: { in: expenseIds } },
-      data: { isSettled: true }
+      where: {
+        expenseId: { in: expenseIds },
+        isSettled: false
+      },
+      data: {
+        isSettled: true,
+        settledAt: new Date()
+      }
     });
 
     logger.info(`Group settled by admin: ${groupId}`);

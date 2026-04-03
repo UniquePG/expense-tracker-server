@@ -7,7 +7,7 @@ const createCategorySchema = z.object({
 });
 
 const categoryIdSchema = z.object({
-  id: z.string().uuid()
+  id: z.number()
 });
 
 module.exports = {

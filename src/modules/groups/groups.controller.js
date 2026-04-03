@@ -1,6 +1,9 @@
 const groupsService = require('./groups.service');
+const cloudinaryService = require('../../utils/cloudinary');
 const ApiResponse = require('../../utils/response');
 const PaginationHelper = require('../../utils/pagination');
+const fs = require('fs');
+const logger = require('../../utils/logger');
 
 class GroupsController {
   async createGroup(req, res, next) {
@@ -65,7 +68,7 @@ class GroupsController {
       const member = await groupsService.addMember(
         req.validatedParams.id,
         req.user.id,
-        req.validatedBody.userId
+        req.validatedBody
       );
       return ApiResponse.success(res, 'Member added', { member }, 201);
     } catch (error) {
@@ -111,6 +114,21 @@ class GroupsController {
     }
   }
 
+  async toggleMemberAdmin(req, res, next) {
+    try {
+      const member = await groupsService.toggleMemberAdmin(
+        req.validatedParams.id,
+        req.user.id,
+        req.params.memberId,
+        req.validatedBody.isAdmin
+      );
+
+      return ApiResponse.success(res, 'Member admin status updated', { member });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   async getGroupBalances(req, res, next) {
     try {
       const balances = await groupsService.getGroupBalances(
@@ -149,6 +167,92 @@ class GroupsController {
         req.user.id
       );
       return ApiResponse.success(res, 'Group settled successfully', result);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async uploadImage(req, res, next) {
+    try {
+      // Check if file was uploaded
+      if (!req.file) {
+        return ApiResponse.error(res, 'No file provided', 400);
+      }
+
+      // Get group to verify membership and check for existing image
+      const group = await groupsService.getGroupById(req.validatedParams.id, req.user.id);
+
+      // Upload to Cloudinary
+      const uploadResult = await cloudinaryService.uploadFile(
+        req.file.path,
+        'splitwise/groups',
+        `${req.validatedParams.id}-image`
+      );
+
+      // Clean up local file
+      if (fs.existsSync(req.file.path)) {
+        fs.unlinkSync(req.file.path);
+      }
+
+      // Delete old image from Cloudinary if it exists
+      if (group.image) {
+        const oldPublicId = cloudinaryService.extractPublicId(group.image);
+        if (oldPublicId) {
+          await cloudinaryService.deleteFile(oldPublicId).catch(err => {
+            logger.warn(`Failed to delete old group image: ${err.message}`);
+          });
+        }
+      }
+
+      // Update group with new image URL
+      const updatedGroup = await groupsService.updateGroup(
+        req.validatedParams.id,
+        req.user.id,
+        { image: uploadResult.url }
+      );
+
+      return ApiResponse.success(res, 'Group image uploaded successfully', {
+        group: updatedGroup,
+        fileInfo: {
+          size: uploadResult.size,
+          format: uploadResult.format,
+          width: uploadResult.width,
+          height: uploadResult.height
+        }
+      });
+    } catch (error) {
+      // Clean up local file if upload failed
+      if (req.file && fs.existsSync(req.file.path)) {
+        fs.unlinkSync(req.file.path);
+      }
+      next(error);
+    }
+  }
+
+  async deleteImage(req, res, next) {
+    try {
+      const group = await groupsService.getGroupById(req.validatedParams.id, req.user.id);
+
+      if (!group.image) {
+        return ApiResponse.error(res, 'No image to delete', 400);
+      }
+
+      // Extract public ID and delete from Cloudinary
+      const publicId = cloudinaryService.extractPublicId(group.image);
+      if (publicId) {
+        await cloudinaryService.deleteFile(publicId);
+      }
+
+      // Remove image from group
+      const updatedGroup = await groupsService.updateGroup(
+        req.validatedParams.id,
+        req.user.id,
+        { image: null }
+      );
+
+      return ApiResponse.success(res, 'Group image deleted successfully', {
+        group: updatedGroup
+      });
     } catch (error) {
       next(error);
     }

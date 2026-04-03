@@ -5,17 +5,25 @@ const PaginationHelper = require('../../utils/pagination');
 class TransactionsController {
   async getTransactions(req, res, next) {
     try {
-      const { page, limit, skip } = PaginationHelper.getPaginationParams(req.query);
+      const query = req.validatedQuery || req.query;
+      const { page, limit, skip } = PaginationHelper.getPaginationParams(query);
+
       const filters = {
-        type: req.query.type,
-        categoryId: req.query.category,
-        startDate: req.query.startDate,
-        endDate: req.query.endDate
+        type: query.type,
+        categoryId: query.categoryId,
+        startDate: query.startDate,
+        endDate: query.endDate,
+        accountId: query.accountId,
+        search: query.search
       };
 
-      const { transactions, total } = await transactionsService.getTransactions(req.user.id, filters, { skip, take: limit });
-      const meta = PaginationHelper.createPaginationMeta(total, page, limit);
+      const { transactions, total } = await transactionsService.getTransactions(
+        req.user.id,
+        filters,
+        { skip, take: limit }
+      );
 
+      const meta = PaginationHelper.createPaginationMeta(total, page, limit);
       return ApiResponse.paginated(res, 'Transactions retrieved', transactions, meta);
     } catch (error) {
       next(error);
@@ -24,7 +32,7 @@ class TransactionsController {
 
   async createTransaction(req, res, next) {
     try {
-      const transaction = await transactionsService.createTransaction(req.user.id, req.validatedBody);
+      const transaction = await transactionsService.createManualTransaction(req.user.id, req.validatedBody);
       return ApiResponse.success(res, 'Transaction created', { transaction }, 201);
     } catch (error) {
       next(error);
@@ -42,7 +50,12 @@ class TransactionsController {
 
   async updateTransaction(req, res, next) {
     try {
-      const transaction = await transactionsService.updateTransaction(req.validatedParams.id, req.user.id, req.body);
+      const transaction = await transactionsService.updateTransaction(
+        req.validatedParams.id,
+        req.user.id,
+        req.validatedBody
+      );
+
       return ApiResponse.success(res, 'Transaction updated', { transaction });
     } catch (error) {
       next(error);
@@ -60,8 +73,35 @@ class TransactionsController {
 
   async getCategories(req, res, next) {
     try {
-      const categories = await transactionsService.getCategories(req.query.type);
+      const categories = await transactionsService.getCategories(req.user.id);
       return ApiResponse.success(res, 'Categories retrieved', categories);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async addIncome(req, res, next) {
+    try {
+      const transaction = await transactionsService.addIncome(req.user.id, req.validatedBody);
+      return ApiResponse.success(res, 'Income added successfully', { transaction }, 201);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async addExpense(req, res, next) {
+    try {
+      const transaction = await transactionsService.addExpense(req.user.id, req.validatedBody);
+      return ApiResponse.success(res, 'Expense added successfully', { transaction }, 201);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async transferBetweenAccounts(req, res, next) {
+    try {
+      const transaction = await transactionsService.transferBetweenAccounts(req.user.id, req.validatedBody);
+      return ApiResponse.success(res, 'Transfer successful', { transaction }, 201);
     } catch (error) {
       next(error);
     }

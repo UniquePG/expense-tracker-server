@@ -9,7 +9,7 @@ const updateProfileSchema = z.object({
 });
 
 const userIdSchema = z.object({
-  id: z.string().uuid('Invalid user ID')
+  id: z.number('Invalid user ID')
 });
 
 const changePasswordSchema = z.object({

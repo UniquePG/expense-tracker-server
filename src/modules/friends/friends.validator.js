@@ -1,20 +1,23 @@
 const { z } = require('zod');
 
 const sendRequestSchema = z.object({
-  addresseeId: z.string().uuid('Invalid user ID')
+  addresseeId: z.number()
 });
 
 const sendRequestByEmailSchema = z.object({
-  email: z.string().email('Invalid email address')
+  email: z.string().email('Invalid email address').optional(),
+  phone: z.string().min(8, 'Invalid phone number').max(20).optional()
+}).refine((value) => value.email || value.phone, {
+  message: 'Either email or phone is required'
 });
 
 const respondRequestSchema = z.object({
-  friendshipId: z.string().uuid('Invalid friendship ID'),
+  friendshipId: z.number(),
   action: z.enum(['accept', 'reject'])
 });
 
 const removeFriendSchema = z.object({
-  friendId: z.string().uuid('Invalid user ID')
+  friendId: z.number()
 });
 
 module.exports = {

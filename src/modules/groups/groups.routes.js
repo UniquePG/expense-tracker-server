@@ -3,12 +3,15 @@ const router = express.Router();
 const groupsController = require('./groups.controller');
 const { authenticate } = require('../../middlewares/auth.middleware');
 const { validateBody, validateParams } = require('../../middlewares/validate.middleware');
+const { uploadImage, handleUploadError } = require('../../middlewares/upload.middleware');
 const {
   createGroupSchema,
   updateGroupSchema,
   groupIdSchema,
   addMemberSchema,
-  settleGroupSchema
+  settleGroupSchema,
+  groupMemberIdSchema,
+  toggleMemberAdminSchema
 } = require('./groups.validator');
 
 /**
@@ -37,5 +40,10 @@ router.get('/:id/balances', authenticate, validateParams(groupIdSchema), groupsC
 
 // Group settle
 router.post('/:id/settle', authenticate, validateParams(groupIdSchema), groupsController.settleGroup);
+router.put('/:id/members/:memberId/admin', authenticate, validateParams(groupMemberIdSchema), validateBody(toggleMemberAdminSchema), groupsController.toggleMemberAdmin);
+
+// Group image
+router.post('/:id/image', authenticate, validateParams(groupIdSchema), uploadImage, handleUploadError, groupsController.uploadImage);
+router.delete('/:id/image', authenticate, validateParams(groupIdSchema), groupsController.deleteImage);
 
 module.exports = router;

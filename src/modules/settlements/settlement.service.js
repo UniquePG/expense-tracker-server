@@ -368,6 +368,106 @@ class SettlementsService {
     logger.info(`Settlement confirmed: ${settlementId}`);
     return updated;
   }
+
+  async rejectSettlement(settlementId, userId) {
+    // Only the receiver can reject the settlement
+    const settlement = await prisma.settlement.findFirst({
+      where: {
+        id: settlementId,
+        toUserId: userId
+      }
+    });
+
+    if (!settlement) {
+      throw { statusCode: 404, message: 'Settlement not found or unauthorized to reject' };
+    }
+
+    if (settlement.status !== 'PENDING') {
+      throw { statusCode: 400, message: 'Only pending settlements can be rejected' };
+    }
+
+    // Revert splits tied to this settlement
+    await prisma.$transaction(async (tx) => {
+      const splits = await tx.settlementSplit.findMany({
+        where: { settlementId }
+      });
+
+      for (const split of splits) {
+        await tx.expenseSplit.update({
+          where: { id: split.expenseSplitId },
+          data: { isSettled: false, settledAt: null }
+        });
+      }
+
+      await tx.settlement.update({
+        where: { id: settlementId },
+        data: { status: 'REJECTED' }
+      });
+    });
+
+    logger.info(`Settlement rejected: ${settlementId}`);
+    return settlement;
+  }
+
+  async cancelSettlement(settlementId, userId) {
+    // Only the sender can cancel the settlement
+    const settlement = await prisma.settlement.findFirst({
+      where: {
+        id: settlementId,
+        fromUserId: userId
+      }
+    });
+
+    if (!settlement) {
+      throw { statusCode: 404, message: 'Settlement not found or unauthorized to cancel' };
+    }
+
+    if (settlement.status !== 'PENDING') {
+      throw { statusCode: 400, message: 'Only pending settlements can be cancelled' };
+    }
+
+    // Revert splits tied to this settlement
+    await prisma.$transaction(async (tx) => {
+      const splits = await tx.settlementSplit.findMany({
+        where: { settlementId }
+      });
+
+      for (const split of splits) {
+        await tx.expenseSplit.update({
+          where: { id: split.expenseSplitId },
+          data: { isSettled: false, settledAt: null }
+        });
+      }
+
+      await tx.settlement.update({
+        where: { id: settlementId },
+        data: { status: 'CANCELLED' }
+      });
+    });
+
+    logger.info(`Settlement cancelled: ${settlementId}`);
+    return settlement;
+  }
+
+  async remindSettlement(settlementId, userId) {
+    const settlement = await prisma.settlement.findFirst({
+      where: {
+        id: settlementId,
+        fromUserId: userId
+      }
+    });
+
+    if (!settlement) {
+      throw { statusCode: 404, message: 'Settlement not found or unauthorized to remind' };
+    }
+
+    if (settlement.status !== 'PENDING') {
+      throw { statusCode: 400, message: 'Can only remind on pending settlements' };
+    }
+
+    // TODO: Send notification/reminder to toUser
+    logger.info(`Reminder sent for settlement: ${settlementId}`);
+  }
 }
 
 module.exports = new SettlementsService();

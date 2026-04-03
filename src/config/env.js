@@ -23,7 +23,11 @@ const envSchema = z.object({
   RATE_LIMIT_MAX_REQUESTS: z.string().default('100'),
   CORS_ORIGIN: z.string().default('http://localhost:3000'),
   LOG_LEVEL: z.enum(['error', 'warn', 'info', 'debug']).default('info'),
-  REDIS_URL: z.string().optional()
+  REDIS_URL: z.string().optional(),
+  CLOUDINARY_CLOUD_NAME: z.string(),
+  CLOUDINARY_API_KEY: z.string(),
+  CLOUDINARY_API_SECRET: z.string(),
+  SERVER_URL: z.string()  
 });
 
 const envVars = envSchema.safeParse(process.env);
@@ -46,6 +50,7 @@ module.exports = {
   },
   email: {
     service: envVars.data.EMAIL_SERVICE,
+    test_mail: "uniquetechexplorer7@gmail.com",
     host: envVars.data.EMAIL_HOST,
     port: envVars.data.EMAIL_PORT ? parseInt(envVars.data.EMAIL_PORT, 10) : undefined,
     user: envVars.data.EMAIL_USER,
@@ -58,5 +63,12 @@ module.exports = {
   },
   corsOrigin: envVars.data.CORS_ORIGIN.split(','),
   logLevel: envVars.data.LOG_LEVEL,
-  redisUrl: envVars.data.REDIS_URL
+  redisUrl: envVars.data.REDIS_URL,
+  cloudinary: {
+    cloudName: envVars.data.CLOUDINARY_CLOUD_NAME,
+    apiKey: envVars.data.CLOUDINARY_API_KEY,
+    apiSecret: envVars.data.CLOUDINARY_API_SECRET
+  },
+  server_url: envVars.data.SERVER_URL
+
 };

@@ -13,7 +13,7 @@ class AnalyticsController {
 
   async getSpendingByCategory(req, res, next) {
     try {
-      const data = await analyticsService.getSpendingByCategory(req.user.id);
+      const data = await analyticsService.getSpendingByCategory(req.user.id, req.query);
       return ApiResponse.success(res, 'Spending by category retrieved', data);
     } catch (error) {
       next(error);
@@ -22,7 +22,7 @@ class AnalyticsController {
 
   async getIncomeVsExpense(req, res, next) {
     try {
-      const data = await analyticsService.getIncomeVsExpense(req.user.id);
+      const data = await analyticsService.getIncomeVsExpense(req.user.id, req.query);
       return ApiResponse.success(res, 'Income vs expense retrieved', data);
     } catch (error) {
       next(error);
@@ -31,7 +31,7 @@ class AnalyticsController {
 
   async getMonthlyTrends(req, res, next) {
     try {
-      const data = await analyticsService.getMonthlyTrends(req.user.id);
+      const data = await analyticsService.getMonthlyTrends(req.user.id, req.query.months);
       return ApiResponse.success(res, 'Monthly trends retrieved', data);
     } catch (error) {
       next(error);
@@ -42,6 +42,16 @@ class AnalyticsController {
     try {
       const data = await analyticsService.getFriendBalances(req.user.id);
       return ApiResponse.success(res, 'Friend balances retrieved', data);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async getGroupAnalytics(req, res, next) {
+    try {
+      const { id } = req.params;
+      const data = await analyticsService.getGroupAnalytics(id, req.user.id);
+      return ApiResponse.success(res, 'Group analytics retrieved', data);
     } catch (error) {
       next(error);
     }

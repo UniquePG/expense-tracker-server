@@ -122,6 +122,37 @@ class InvitesService {
     logger.info(`Processed ${invites.length} invites for ${email}`);
     return invites.length;
   }
+
+  async resendInvite(inviteId, userId) {
+    const invite = await prisma.invite.findUnique({
+      where: { id: inviteId }
+    });
+
+    if (!invite) {
+      throw { statusCode: 404, message: 'Invite not found' };
+    }
+
+    if (invite.invitedById !== userId) {
+      throw { statusCode: 403, message: 'Unauthorized to resend this invite' };
+    }
+
+    if (invite.status !== 'PENDING') {
+      throw { statusCode: 400, message: 'Cannot resend non-pending invite' };
+    }
+
+    // Update expiry to 7 days from now
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + 7);
+
+    const updatedInvite = await prisma.invite.update({
+      where: { id: inviteId },
+      data: { expiresAt }
+    });
+
+    // TODO: Resend email/SMS with updated link
+    logger.info(`Invite resent: ${inviteId}`);
+    return updatedInvite;
+  }
 }
 
 module.exports = new InvitesService();
